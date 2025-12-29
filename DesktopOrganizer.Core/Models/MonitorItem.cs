@@ -12,4 +12,9 @@ public class MonitorItem
     public double DpiScaleX { get; set; } = 1.0;
     public double DpiScaleY { get; set; } = 1.0;
     public IntPtr Handle { get; set; }
+
+    public override string ToString()
+    {
+        return $"{DeviceName} (Primary:{IsPrimary}) Bounds:[{Bounds.Left},{Bounds.Top},{Bounds.Width}x{Bounds.Height}] DPI:{DpiScaleX:F2}";
+    }
 }

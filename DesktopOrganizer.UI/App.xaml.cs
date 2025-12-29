@@ -62,7 +62,7 @@ public partial class App : System.Windows.Application
         DesktopOrganizer.Core.Utilities.Logger.Log($"Detected {monitors.Count} monitors.");
         foreach (var m in monitors)
         {
-            DesktopOrganizer.Core.Utilities.Logger.Log($"Monitor: {m.DeviceName} Bounds:{m.Bounds} Primary:{m.IsPrimary} DeviceId:{m.DeviceId}");
+            DesktopOrganizer.Core.Utilities.Logger.Log($"Monitor Detected: {m}");
         }
 
         // Close existing overlays
@@ -205,6 +205,10 @@ public partial class App : System.Windows.Application
         foreach (var window in _windows)
         {
             window.SetEditMode(_isEditMode);
+            if (window.DataContext is ViewModels.OverlayViewModel vm)
+            {
+                vm.IsEditMode = _isEditMode;
+            }
         }
     }
 

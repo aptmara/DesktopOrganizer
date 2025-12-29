@@ -30,20 +30,22 @@ public partial class ShelfControl : UserControl
 
     private void ShelfControl_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        // 編集モードの場合のみドラッグを許可
-        // OverlayWindowのロジックにより、Viewモードではマウスイベントを受け取らないため
-        // ここに来る時点で編集モードである
+        // 親Window (OverlayWindow) のDataContext (OverlayViewModel) から IsEditMode を取得して判定
+        var window = Window.GetWindow(this);
+        if (window?.DataContext is OverlayViewModel overlayVm && !overlayVm.IsEditMode)
+        {
+            // View Mode: ドラッグ不可、クリックは通す（内部のアイテムクリック等）
+            return;
+        }
 
+        // Edit Mode: ドラッグ開始
         _isDragging = true;
-        _startPoint = e.GetPosition(this); // コントロール相対ではなくスクリーン座標が必要
-
-        // マウスキャプチャ推奨
+        // Window（Canvas相当）からの相対座標を取得。論理ピクセル。
+        _startPoint = e.GetPosition(null);
         this.CaptureMouse();
 
         if (DataContext is ShelfViewModel vm)
         {
-            // スクリーン座標を取得
-            _startPoint = PointToScreen(e.GetPosition(this));
             _startPosition = new Point(vm.Left, vm.Top);
         }
     }
@@ -52,22 +54,13 @@ public partial class ShelfControl : UserControl
     {
         if (_isDragging && DataContext is ShelfViewModel vm)
         {
-            var currentPoint = PointToScreen(e.GetPosition(this));
+            // Windowからの相対座標（論理ピクセル）
+            var currentPoint = e.GetPosition(null);
             var deltaX = currentPoint.X - _startPoint.X;
             var deltaY = currentPoint.Y - _startPoint.Y;
 
-            // PointToScreenはデバイスピクセルを返すため
-            // ViewModelが期待する論理ピクセルに変換が必要
-
-            var source = PresentationSource.FromVisual(this);
-            if (source?.CompositionTarget != null)
-            {
-                var transform = source.CompositionTarget.TransformFromDevice;
-                var logicalDelta = transform.Transform(new Point(deltaX, deltaY));
-
-                vm.Left = _startPosition.X + logicalDelta.X;
-                vm.Top = _startPosition.Y + logicalDelta.Y;
-            }
+            vm.Left = _startPosition.X + deltaX;
+            vm.Top = _startPosition.Y + deltaY;
         }
     }
 
