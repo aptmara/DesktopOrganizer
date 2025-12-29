@@ -1,24 +1,83 @@
 ﻿using System.Windows;
 using DesktopOrganizer.Core.Services;
+using System.Diagnostics;
 
 namespace DesktopOrganizer.UI;
 
 public partial class App : System.Windows.Application
 {
-    private readonly MonitorService _monitorService = new();
-    private readonly LayoutManager _layoutManager = new();
-    private readonly List<OverlayWindow> _windows = new();
+    private MonitorService _monitorService = new();
+    private LayoutManager _layoutManager = new();
+    private List<OverlayWindow> _windows = new();
 
-    private readonly Services.InputService _inputService = new();
-    private readonly Services.TaskTrayIcon _trayIcon = new();
+    private Services.InputService _inputService = new();
+    private Services.TaskTrayIcon _taskTrayIcon = new();
     private bool _isEditMode = false;
 
     private void Application_Startup(object sender, StartupEventArgs e)
     {
-        _layoutManager.LoadLayout();
+        DesktopOrganizer.Core.Utilities.Logger.Log("Application Started.");
 
-        // データが空の場合初期データをシード設定
-        if (_layoutManager.CurrentLayout.Shelves.Count == 0)
+        // 1. Unhandled Exception Handling
+        AppDomain.CurrentDomain.UnhandledException += (s, args) =>
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError("Unhandled AppDomain Exception", args.ExceptionObject as Exception);
+        };
+        DispatcherUnhandledException += (s, args) =>
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError("Unhandled Dispatcher Exception", args.Exception);
+        };
+
+        // 2. Initialize Services
+        _inputService = new DesktopOrganizer.UI.Services.InputService();
+        // Hotkey registration is done in UpdateMonitors (requires Window Handle)
+
+        _monitorService = new DesktopOrganizer.Core.Services.MonitorService();
+        _layoutManager = new DesktopOrganizer.Core.Services.LayoutManager();
+
+        _taskTrayIcon = new DesktopOrganizer.UI.Services.TaskTrayIcon();
+        _taskTrayIcon.ToggleEditModeRequested += (s, args) => ToggleEditMode();
+        _taskTrayIcon.CreateShelfRequested += OnCreateShelfRequested;
+        _taskTrayIcon.ExitRequested += (s, args) => Shutdown();
+        _taskTrayIcon.Initialize();
+
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+
+        // 3. Monitor Detection & UI Setup
+        UpdateMonitors();
+
+        DesktopOrganizer.Core.Utilities.Logger.Log("Startup Sequence Completed.");
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        DesktopOrganizer.Core.Utilities.Logger.Log("Display settings changed. Updating monitors...");
+        UpdateMonitors();
+    }
+
+    private void UpdateMonitors()
+    {
+        DesktopOrganizer.Core.Utilities.Logger.Log("Updating Monitors...");
+        var monitors = _monitorService.GetMonitors();
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Detected {monitors.Count} monitors.");
+        foreach (var m in monitors)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log($"Monitor: {m.DeviceName} Bounds:{m.Bounds} Primary:{m.IsPrimary} DeviceId:{m.DeviceId}");
+        }
+
+        // Close existing overlays
+        foreach (var window in _windows)
+        {
+            window.Close();
+        }
+        _windows.Clear();
+
+        // Load layout data
+        _layoutManager.LoadLayout();
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Layout Loaded. Shelves: {_layoutManager.CurrentLayout.Shelves.Count}");
+
+        // Demo Data if empty
+        if (_layoutManager.CurrentLayout.Shelves.Count == 0 && monitors.Count > 0)
         {
             var demoShelf = new Core.Models.Shelf
             {
@@ -35,143 +94,131 @@ public partial class App : System.Windows.Application
             };
             _layoutManager.CurrentLayout.Shelves.Add(demoShelf);
             _layoutManager.SaveLayout();
+            DesktopOrganizer.Core.Utilities.Logger.Log("Demo shelf added and layout saved.");
         }
 
-        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-
-        _trayIcon.Initialize();
-        _trayIcon.ToggleEditModeRequested += OnToggleEditMode;
-        _trayIcon.CreateShelfRequested += OnCreateShelfRequested;
-        _trayIcon.ExitRequested += (s, args) => Shutdown();
-
-        InitializeOverlayWindows();
-    }
-
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
-    {
-        // 単純な再読み込み戦略: すべて閉じて再作成
-        foreach (var window in _windows)
-        {
-            window.Close();
-        }
-        _windows.Clear();
-
-        // 新しいウィンドウを設定
-        InitializeOverlayWindows();
-    }
-
-    private void InitializeOverlayWindows()
-    {
-        var monitors = _monitorService.GetMonitors();
-
+        // Create Overlay for EACH monitor
         foreach (var monitor in monitors)
         {
-            var left = monitor.Bounds.Left / monitor.DpiScaleX;
-            var top = monitor.Bounds.Top / monitor.DpiScaleY;
-            var width = monitor.Bounds.Width / monitor.DpiScaleX;
-            var height = monitor.Bounds.Height / monitor.DpiScaleY;
-
-            var window = new OverlayWindow
-            {
-                Left = left,
-                Top = top,
-                Width = width,
-                Height = height,
-                Title = $"Overlay - {monitor.DeviceName}"
-            };
-
-            var vm = new ViewModels.OverlayViewModel();
-
-            foreach (var shelfModel in _layoutManager.CurrentLayout.Shelves)
-            {
-                var bestMonitor = _layoutManager.FindBestMonitor(shelfModel, monitors);
-
-                if (bestMonitor.DeviceName == monitor.DeviceName)
-                {
-                    var physRect = _layoutManager.CalculatePhysicalRect(shelfModel, monitor);
-
-                    var shelfVm = new ViewModels.ShelfViewModel(shelfModel, _layoutManager.SaveLayout)
-                    {
-                        Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
-                        Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
-                        Width = physRect.Width / monitor.DpiScaleX,
-                        Height = physRect.Height / monitor.DpiScaleY
-                    };
-
-                    shelfVm.ShelfMoved += (l, t, w, h) =>
-                    {
-                        var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
-                        var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
-                        var pWidth = (int)(w * monitor.DpiScaleX);
-                        var pHeight = (int)(h * monitor.DpiScaleY);
-
-                        var rect = new Core.Interop.NativeMethods.RECT
-                        {
-                            Left = pLeft,
-                            Top = pTop,
-                            Right = pLeft + pWidth,
-                            Bottom = pTop + pHeight
-                        };
-
-                        _layoutManager.UpdateShelfPosition(shelfModel, rect, monitor);
-                        _layoutManager.SaveLayout();
-                        _layoutManager.SaveLayout();
-                    };
-
-                    shelfVm.DeleteRequested += (s, args) =>
-                    {
-                        vm.Shelves.Remove(shelfVm);
-                        _layoutManager.CurrentLayout.Shelves.Remove(shelfModel);
-                        _layoutManager.SaveLayout();
-                    };
-
-                    shelfVm.RenameRequested += (s, args) =>
-                    {
-                        var dialog = new Controls.RenameDialog(shelfVm.Title);
-                        if (dialog.ShowDialog() == true)
-                        {
-                            shelfVm.Title = dialog.ResultName;
-                            _layoutManager.SaveLayout();
-                        }
-                    };
-
-                    vm.AddShelf(shelfVm);
-                }
-            }
-
-            window.DataContext = vm;
-            window.Show();
-            _windows.Add(window);
-
-            // 表示後にモードを復元
-            window.SetEditMode(_isEditMode);
+            CreateOverlayForMonitor(monitor, monitors);
         }
 
         if (_windows.Count > 0)
         {
-            // プライマリまたは最初のウィンドウに登録
             _inputService.Register(_windows[0]);
+            // Re-bind event to avoid duplication if called multiple times? 
+            // Logic in InputService handles Handle property change if register called again.
+            // But event subscription in App.xaml.cs:
+            _inputService.ToggleEditModeRequested -= OnToggleEditModeHandler;
+            _inputService.ToggleEditModeRequested += OnToggleEditModeHandler;
+        }
+    }
 
-            // 多重登録防止
-            _inputService.ToggleEditModeRequested -= OnToggleEditMode;
-            _inputService.ToggleEditModeRequested += OnToggleEditMode;
+    private void OnToggleEditModeHandler(object? sender, EventArgs e) => ToggleEditMode();
+
+    private void CreateOverlayForMonitor(Core.Models.MonitorItem monitor, List<Core.Models.MonitorItem> allMonitors)
+    {
+        var left = monitor.Bounds.Left / monitor.DpiScaleX;
+        var top = monitor.Bounds.Top / monitor.DpiScaleY;
+        var width = monitor.Bounds.Width / monitor.DpiScaleX;
+        var height = monitor.Bounds.Height / monitor.DpiScaleY;
+
+        var window = new OverlayWindow
+        {
+            Left = left,
+            Top = top,
+            Width = width,
+            Height = height,
+            Title = $"Overlay - {monitor.DeviceName}"
+        };
+
+        var vm = new ViewModels.OverlayViewModel();
+
+        foreach (var shelfModel in _layoutManager.CurrentLayout.Shelves)
+        {
+            var bestMonitor = _layoutManager.FindBestMonitor(shelfModel, allMonitors);
+
+            if (bestMonitor.DeviceName == monitor.DeviceName)
+            {
+                var physRect = _layoutManager.CalculatePhysicalRect(shelfModel, monitor);
+
+                var shelfVm = new ViewModels.ShelfViewModel(shelfModel, _layoutManager.SaveLayout)
+                {
+                    Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
+                    Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
+                    Width = physRect.Width / monitor.DpiScaleX,
+                    Height = physRect.Height / monitor.DpiScaleY
+                };
+
+                shelfVm.ShelfMoved += (l, t, w, h) =>
+                {
+                    var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
+                    var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
+                    var pWidth = (int)(w * monitor.DpiScaleX);
+                    var pHeight = (int)(h * monitor.DpiScaleY);
+
+                    var rect = new Core.Interop.NativeMethods.RECT
+                    {
+                        Left = pLeft,
+                        Top = pTop,
+                        Right = pLeft + pWidth,
+                        Bottom = pTop + pHeight
+                    };
+
+                    _layoutManager.UpdateShelfPosition(shelfModel, rect, monitor);
+                    _layoutManager.SaveLayout();
+                };
+
+                shelfVm.DeleteRequested += (s, args) =>
+                {
+                    vm.Shelves.Remove(shelfVm);
+                    _layoutManager.CurrentLayout.Shelves.Remove(shelfModel);
+                    _layoutManager.SaveLayout();
+                };
+
+                shelfVm.RenameRequested += (s, args) =>
+                {
+                    var dialog = new Controls.RenameDialog(shelfVm.Title);
+                    if (dialog.ShowDialog() == true)
+                    {
+                        shelfVm.Title = dialog.ResultName;
+                        _layoutManager.SaveLayout();
+                    }
+                };
+
+                vm.AddShelf(shelfVm);
+            }
+        }
+
+        window.DataContext = vm;
+        window.Show();
+        _windows.Add(window);
+
+        // Restore Edit Mode state
+        window.SetEditMode(_isEditMode);
+    }
+
+    private void ToggleEditMode()
+    {
+        _isEditMode = !_isEditMode;
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Toggle Edit Mode: {_isEditMode}");
+        foreach (var window in _windows)
+        {
+            window.SetEditMode(_isEditMode);
         }
     }
 
     private void OnCreateShelfRequested(object? sender, EventArgs e)
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log("Create Shelf Requested.");
         // 最初のウィンドウ（通常はプライマリ）を取得
         var targetWindow = _windows.FirstOrDefault();
         if (targetWindow == null || targetWindow.DataContext is not ViewModels.OverlayViewModel vm) return;
 
-        // モニタ情報の取得はMonitorServiceからの方が確実だが、
-        // ここではWindowに関連付いているLayoutManagerのロジックを再利用したい。
-        // 新規棚データ作成
         var newShelf = new Core.Models.Shelf
         {
             Title = "New Shelf",
-            X = 0.4, // Center-ish
+            X = 0.4,
             Y = 0.4,
             Width = 0.2,
             Height = 0.2,
@@ -183,7 +230,6 @@ public partial class App : System.Windows.Application
         var monitors = _monitorService.GetMonitors();
         var monitor = monitors.FirstOrDefault(m => m.DeviceName == targetWindow.Title.Replace("Overlay - ", "")) ?? monitors.First();
 
-        // 配置ロジック再利用（既存コードの抽出が必要だが、ここではインラインで複製して実装）
         var physRect = _layoutManager.CalculatePhysicalRect(newShelf, monitor);
 
         var shelfVm = new ViewModels.ShelfViewModel(newShelf, _layoutManager.SaveLayout)
@@ -211,8 +257,6 @@ public partial class App : System.Windows.Application
 
             _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
             _layoutManager.SaveLayout();
-            _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
-            _layoutManager.SaveLayout();
         };
 
         shelfVm.DeleteRequested += (s, args) =>
@@ -235,26 +279,17 @@ public partial class App : System.Windows.Application
         vm.AddShelf(shelfVm);
         _layoutManager.SaveLayout();
 
-        // 編集モードをONにする
         if (!_isEditMode)
         {
-            OnToggleEditMode(this, EventArgs.Empty);
-        }
-    }
-
-    private void OnToggleEditMode(object? sender, EventArgs e)
-    {
-        _isEditMode = !_isEditMode;
-        foreach (var window in _windows)
-        {
-            window.SetEditMode(_isEditMode);
+            ToggleEditMode();
         }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log("Application Exiting...");
         _inputService.Dispose();
-        _trayIcon.Dispose();
+        _taskTrayIcon.Dispose();
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         base.OnExit(e);
     }

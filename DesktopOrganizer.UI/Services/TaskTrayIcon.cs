@@ -15,9 +15,21 @@ public class TaskTrayIcon : IDisposable
     public void Initialize()
     {
         _contextMenu = new ContextMenuStrip();
-        var editItem = new ToolStripMenuItem("Toggle Edit Mode (Ctrl+Alt+Space)", null, (s, e) => ToggleEditModeRequested?.Invoke(this, EventArgs.Empty));
-        var createShelfItem = new ToolStripMenuItem("Create New Shelf", null, (s, e) => CreateShelfRequested?.Invoke(this, EventArgs.Empty));
-        var exitItem = new ToolStripMenuItem("Exit", null, (s, e) => ExitRequested?.Invoke(this, EventArgs.Empty));
+        var editItem = new ToolStripMenuItem("Toggle Edit Mode (Ctrl+Alt+Space)", null, (s, e) =>
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log("Tray: Toggle Edit Mode requested");
+            ToggleEditModeRequested?.Invoke(this, EventArgs.Empty);
+        });
+        var createShelfItem = new ToolStripMenuItem("Create New Shelf", null, (s, e) =>
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log("Tray: Create New Shelf requested");
+            CreateShelfRequested?.Invoke(this, EventArgs.Empty);
+        });
+        var exitItem = new ToolStripMenuItem("Exit", null, (s, e) =>
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log("Tray: Exit requested");
+            ExitRequested?.Invoke(this, EventArgs.Empty);
+        });
 
         _contextMenu.Items.Add(editItem);
         _contextMenu.Items.Add(createShelfItem);

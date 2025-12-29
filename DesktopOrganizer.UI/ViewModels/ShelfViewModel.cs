@@ -33,6 +33,8 @@ public class ShelfViewModel : ViewModelBase, IDisposable
         _model = model;
         _saveLayoutAction = saveLayoutAction;
 
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Initializing ShelfViewModel: {model.Title} (Path: {model.DirectoryPath ?? "null"})");
+
         if (!string.IsNullOrEmpty(model.DirectoryPath))
         {
             // 既存アイテムはクリアして再同期（整合性確保）
@@ -165,22 +167,35 @@ public class ShelfViewModel : ViewModelBase, IDisposable
 
     private void InitializeSmartShelf()
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log($"InitializeSmartShelf: {DirectoryPath}");
         _watcher?.Dispose();
         _items.Clear();
         _model.Items.Clear();
 
-        if (string.IsNullOrEmpty(DirectoryPath) || !Directory.Exists(DirectoryPath)) return;
+        if (string.IsNullOrEmpty(DirectoryPath) || !Directory.Exists(DirectoryPath))
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log($"Directory not found: {DirectoryPath}");
+            return;
+        }
 
         // 初期同期
         SyncFromDirectory();
 
         // 監視開始
-        _watcher = new FileSystemWatcher(DirectoryPath);
-        _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
-        _watcher.Created += OnFileChanged;
-        _watcher.Deleted += OnFileChanged;
-        _watcher.Renamed += OnFileRenamed;
-        _watcher.EnableRaisingEvents = true;
+        try
+        {
+            _watcher = new FileSystemWatcher(DirectoryPath);
+            _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
+            _watcher.Created += OnFileChanged;
+            _watcher.Deleted += OnFileChanged;
+            _watcher.Renamed += OnFileRenamed;
+            _watcher.EnableRaisingEvents = true;
+            DesktopOrganizer.Core.Utilities.Logger.Log("FileSystemWatcher Started.");
+        }
+        catch (Exception ex)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError("Failed to start FileSystemWatcher", ex);
+        }
     }
 
     private void SyncFromDirectory()
@@ -205,6 +220,7 @@ public class ShelfViewModel : ViewModelBase, IDisposable
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log($"FileChanged: {e.ChangeType} - {e.FullPath}");
         // 頻繁な更新を防ぐためのデバウンスが必要かもしれないが、まずは直接同期呼び出し
         // 実際にはファイルのロック等で失敗する可能性があるため、少し遅延させると良いが、
         // ここではシンプルに再同期をかける。

@@ -22,30 +22,41 @@ public class LayoutManager
 
     public void LoadLayout()
     {
+        Utilities.Logger.Log($"Loading layout from {_layoutPath}");
         if (File.Exists(_layoutPath))
         {
             try
             {
                 var json = File.ReadAllText(_layoutPath);
                 CurrentLayout = JsonSerializer.Deserialize<LayoutData>(json) ?? new LayoutData();
+                Utilities.Logger.Log($"Layout loaded successfully. {_layoutPath}");
             }
-            catch
+            catch (Exception ex)
             {
-                // データ破損時は空でフォールバック
+                Utilities.Logger.LogError("Failed to load layout. Initializing new layout.", ex);
                 CurrentLayout = new LayoutData();
             }
         }
         else
         {
+            Utilities.Logger.Log("Layout file not found. Initializing new layout.");
             CurrentLayout = new LayoutData();
         }
     }
 
     public void SaveLayout()
     {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        var json = JsonSerializer.Serialize(CurrentLayout, options);
-        File.WriteAllText(_layoutPath, json);
+        try
+        {
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            var json = JsonSerializer.Serialize(CurrentLayout, options);
+            File.WriteAllText(_layoutPath, json);
+            Utilities.Logger.Log($"Layout saved to {_layoutPath}");
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError("Failed to save layout.", ex);
+        }
     }
 
     /// <summary>
@@ -80,9 +91,14 @@ public class LayoutManager
 
         // 2. フォールバック: プライマリモニター
         var primary = monitors.FirstOrDefault(m => m.IsPrimary);
-        if (primary != null) return primary;
+        if (primary != null)
+        {
+            Utilities.Logger.Log($"Shelf monitor '{shelf.TargetMonitorDeviceId}' not found. Fallback to Primary.");
+            return primary;
+        }
 
         // 3. フォールバック: 最初のモニター
+        Utilities.Logger.Log($"Shelf monitor '{shelf.TargetMonitorDeviceId}' not found. Fallback to First Main.");
         return monitors.First();
     }
 
@@ -102,5 +118,7 @@ public class LayoutManager
         shelf.Height = (double)currentRect.Height / waHeight;
 
         shelf.TargetMonitorDeviceId = monitor.DeviceName;
+
+        Utilities.Logger.Log($"Shelf '{shelf.Title}' position updated. Norm: ({shelf.X:F3}, {shelf.Y:F3}) Monitor: {monitor.DeviceName}");
     }
 }
