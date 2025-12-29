@@ -1,6 +1,12 @@
 using System.Windows;
 using System.Windows.Controls;
 using DesktopOrganizer.UI.ViewModels;
+using Point = System.Windows.Point;
+using UserControl = System.Windows.Controls.UserControl;
+using MessageBox = System.Windows.MessageBox;
+using MenuItem = System.Windows.Controls.MenuItem;
+using DragEventArgs = System.Windows.DragEventArgs;
+using DataFormats = System.Windows.DataFormats;
 
 namespace DesktopOrganizer.UI.Controls;
 
@@ -107,7 +113,7 @@ public partial class ShelfControl : UserControl
         }
     }
 
-    private void UserControl_Drop(object sender, DragEventArgs e)
+    private void UserControl_Drop(object sender, System.Windows.DragEventArgs e)
     {
         if (DataContext is ShelfViewModel vm)
         {

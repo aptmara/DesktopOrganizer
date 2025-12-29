@@ -3,13 +3,14 @@ using DesktopOrganizer.Core.Services;
 
 namespace DesktopOrganizer.UI;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private readonly MonitorService _monitorService = new();
     private readonly LayoutManager _layoutManager = new();
     private readonly List<OverlayWindow> _windows = new();
 
     private readonly Services.InputService _inputService = new();
+    private readonly Services.TaskTrayIcon _trayIcon = new();
     private bool _isEditMode = false;
 
     private void Application_Startup(object sender, StartupEventArgs e)
@@ -37,6 +38,12 @@ public partial class App : Application
         }
 
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+
+        _trayIcon.Initialize();
+        _trayIcon.ToggleEditModeRequested += OnToggleEditMode;
+        _trayIcon.ExitRequested += (s, args) => Shutdown();
+
         InitializeOverlayWindows();
     }
 
@@ -145,6 +152,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _inputService.Dispose();
+        _trayIcon.Dispose();
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         base.OnExit(e);
     }
