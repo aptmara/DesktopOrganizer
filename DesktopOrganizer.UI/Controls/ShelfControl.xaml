@@ -71,16 +71,24 @@
         <local:BooleanToOpacityConverter x:Key="BooleanToOpacityConverter"/>
     </UserControl.Resources>
     
-    <Border CornerRadius="12" BorderBrush="#33FFFFFF" BorderThickness="1">
-        <Border.Background>
-            <SolidColorBrush Color="#CC1E1E24"/>
-        </Border.Background>
+    <Border CornerRadius="12" BorderBrush="#33FFFFFF" BorderThickness="1" Background="{Binding BackgroundBrush}">
         <Border.Effect>
             <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Opacity="0.5"/>
         </Border.Effect>
         <Border.ContextMenu>
             <ContextMenu>
                 <MenuItem Header="Rename Shelf" Click="MenuItem_RenameShelf_Click"/>
+                <Separator/>
+                <MenuItem Header="Color">
+                    <MenuItem Header="Default" Tag="#CC1E1E24" Click="MenuItem_Color_Click"/>
+                    <MenuItem Header="Blue" Tag="#CC004488" Click="MenuItem_Color_Click"/>
+                    <MenuItem Header="Red" Tag="#CC880000" Click="MenuItem_Color_Click"/>
+                    <MenuItem Header="Green" Tag="#CC006622" Click="MenuItem_Color_Click"/>
+                    <MenuItem Header="Orange" Tag="#CCAA4400" Click="MenuItem_Color_Click"/>
+                    <MenuItem Header="Purple" Tag="#CC440088" Click="MenuItem_Color_Click"/>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="Link Folder (Smart Shelf)..." Click="MenuItem_SmartShelf_Click"/>
                 <Separator/>
                 <MenuItem Header="Delete Shelf" Click="MenuItem_DeleteShelf_Click"/>
             </ContextMenu>

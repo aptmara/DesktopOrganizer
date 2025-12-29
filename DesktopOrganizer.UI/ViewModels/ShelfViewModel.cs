@@ -14,9 +14,14 @@ public class ViewModelBase : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-public class ShelfViewModel : ViewModelBase
+public class ShelfViewModel : ViewModelBase, IDisposable
 {
     private readonly Shelf _model;
+
+    public void Dispose()
+    {
+        _watcher?.Dispose();
+    }
 
     private ObservableCollection<ShelfItemViewModel> _items = new();
     public ObservableCollection<ShelfItemViewModel> Items => _items;
@@ -27,9 +32,18 @@ public class ShelfViewModel : ViewModelBase
     {
         _model = model;
         _saveLayoutAction = saveLayoutAction;
-        foreach (var item in model.Items)
+
+        if (!string.IsNullOrEmpty(model.DirectoryPath))
         {
-            _items.Add(new ShelfItemViewModel(item));
+            // 既存アイテムはクリアして再同期（整合性確保）
+            InitializeSmartShelf();
+        }
+        else
+        {
+            foreach (var item in model.Items)
+            {
+                _items.Add(new ShelfItemViewModel(item));
+            }
         }
     }
 
@@ -57,7 +71,11 @@ public class ShelfViewModel : ViewModelBase
         ShelfMoved?.Invoke(Left, Top, Width, Height);
     }
 
-    public void RequestDelete() => DeleteRequested?.Invoke(this, EventArgs.Empty);
+    public void RequestDelete()
+    {
+        Dispose();
+        DeleteRequested?.Invoke(this, EventArgs.Empty);
+    }
     public void RequestRename() => RenameRequested?.Invoke(this, EventArgs.Empty);
 
     public string Title
@@ -95,10 +113,135 @@ public class ShelfViewModel : ViewModelBase
         set { _height = value; OnPropertyChanged(); }
     }
 
-    public void AddFile(string path)
+    // Phase 3: Theming
+    public string ThemeColor
+    {
+        get => _model.ThemeColor;
+        set
+        {
+            if (_model.ThemeColor != value)
+            {
+                _model.ThemeColor = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(BackgroundBrush));
+                _saveLayoutAction?.Invoke();
+            }
+        }
+    }
+
+    public System.Windows.Media.Brush BackgroundBrush
+    {
+        get
+        {
+            try
+            {
+                var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(_model.ThemeColor);
+                return new System.Windows.Media.SolidColorBrush(color);
+            }
+            catch
+            {
+                return new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#CC1E1E24"));
+            }
+        }
+    }
+
+    // Phase 3: Smart Shelf
+    public string? DirectoryPath
+    {
+        get => _model.DirectoryPath;
+        set
+        {
+            if (_model.DirectoryPath != value)
+            {
+                _model.DirectoryPath = value;
+                OnPropertyChanged();
+                InitializeSmartShelf();
+                _saveLayoutAction?.Invoke();
+            }
+        }
+    }
+
+    private FileSystemWatcher? _watcher;
+
+    private void InitializeSmartShelf()
+    {
+        _watcher?.Dispose();
+        _items.Clear();
+        _model.Items.Clear();
+
+        if (string.IsNullOrEmpty(DirectoryPath) || !Directory.Exists(DirectoryPath)) return;
+
+        // 初期同期
+        SyncFromDirectory();
+
+        // 監視開始
+        _watcher = new FileSystemWatcher(DirectoryPath);
+        _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
+        _watcher.Created += OnFileChanged;
+        _watcher.Deleted += OnFileChanged;
+        _watcher.Renamed += OnFileRenamed;
+        _watcher.EnableRaisingEvents = true;
+    }
+
+    private void SyncFromDirectory()
+    {
+        if (string.IsNullOrEmpty(DirectoryPath)) return;
+
+        var files = Directory.GetFiles(DirectoryPath);
+        // 更新頻度が高い場合のパフォーマンスを考慮し、一旦クリアして再構築（簡易実装）
+        // 本来はDiffを取るべきだが、アイテム数が少なめと想定。
+
+        // UIスレッドで実行
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            _items.Clear();
+            _model.Items.Clear();
+            foreach (var file in files)
+            {
+                AddFileInternal(file);
+            }
+        });
+    }
+
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        // 頻繁な更新を防ぐためのデバウンスが必要かもしれないが、まずは直接同期呼び出し
+        // 実際にはファイルのロック等で失敗する可能性があるため、少し遅延させると良いが、
+        // ここではシンプルに再同期をかける。
+        // 個別の追加・削除を行う方が効率的。
+
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (e.ChangeType == WatcherChangeTypes.Created)
+            {
+                AddFileInternal(e.FullPath);
+            }
+            else if (e.ChangeType == WatcherChangeTypes.Deleted)
+            {
+                var vm = _items.FirstOrDefault(i => i.TargetPath == e.FullPath);
+                if (vm != null) RemoveItemInternal(vm);
+            }
+        });
+    }
+
+    private void OnFileRenamed(object sender, RenamedEventArgs e)
+    {
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            var vm = _items.FirstOrDefault(i => i.TargetPath == e.OldFullPath);
+            if (vm != null) RemoveItemInternal(vm);
+            AddFileInternal(e.FullPath);
+        });
+    }
+
+    private void AddFileInternal(string path)
     {
         // 簡易的な型検出
         var type = ShelfItemType.File;
+        // ... (AddFileロジックの再利用) ...
+        // AddFileメソッドのリファクタが必要。
+        // ここではAddFileのロジックをコピーしておく（後で共通化推奨）
+
         if (Directory.Exists(path)) type = ShelfItemType.Folder;
         else if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) type = ShelfItemType.Shortcut;
         else if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) type = ShelfItemType.Executable;
@@ -109,14 +252,35 @@ public class ShelfViewModel : ViewModelBase
             Title = Path.GetFileNameWithoutExtension(path),
             TargetPath = path,
             Type = type,
-            OriginalIconPath = path // 抽出用設定
+            OriginalIconPath = path
         };
 
         _model.Items.Add(item);
         _items.Add(new ShelfItemViewModel(item));
+    }
 
-        // 保存をトリガー
-        OnMoved();
+    private void RemoveItemInternal(ShelfItemViewModel vm)
+    {
+        _items.Remove(vm);
+        var modelItem = _model.Items.FirstOrDefault(i => i.TargetPath == vm.TargetPath);
+        if (modelItem != null) _model.Items.Remove(modelItem);
+    }
+
+    // Public method for Drag&Drop (Manual Add)
+    // Smart Shelfの場合は無視するか、コピーするか。
+    // 今回は「Smart Shelfなら何もしない（Watcherに任せる）」とする。
+    public void AddFile(string path)
+    {
+        if (!string.IsNullOrEmpty(DirectoryPath))
+        {
+            // Smart Shelfの場合、実ファイルをコピーまたは移動する必要があるが、
+            // UX的にドラッグでファイル移動は慎重に行うべき。
+            // ここでは未実装（手動追加不可）とする。
+            return;
+        }
+
+        AddFileInternal(path);
+        OnMoved(); // Save trigger
     }
 
     public void MoveItem(ShelfItemViewModel source, ShelfItemViewModel target)

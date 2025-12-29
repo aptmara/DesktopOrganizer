@@ -35,6 +35,12 @@ public class Shelf
     public double Width { get; set; } = 0.2;
     public double Height { get; set; } = 0.3;
 
+    // Phase 3: Smart Shelf
+    public string? DirectoryPath { get; set; }
+
+    // Phase 3: Theming
+    public string ThemeColor { get; set; } = "#CC1E1E24";
+
     public string TargetMonitorDeviceId { get; set; } = string.Empty;
 
     public List<ShelfItem> Items { get; set; } = new();

@@ -193,4 +193,29 @@ public partial class ShelfControl : UserControl
             }
         }
     }
+
+    private void MenuItem_Color_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem && menuItem.Tag is string colorCode && DataContext is ShelfViewModel vm)
+        {
+            vm.ThemeColor = colorCode;
+        }
+    }
+
+    private void MenuItem_SmartShelf_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ShelfViewModel vm)
+        {
+            using var dialog = new System.Windows.Forms.FolderBrowserDialog();
+            dialog.Description = "Select a folder to link to this shelf (Smart Shelf)";
+            dialog.UseDescriptionForTitle = true;
+            dialog.ShowNewFolderButton = true;
+
+            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                vm.Title = System.IO.Path.GetFileName(dialog.SelectedPath); // タイトルをフォルダ名に更新
+                vm.DirectoryPath = dialog.SelectedPath; // これでSmart Shelf化される
+            }
+        }
+    }
 }
