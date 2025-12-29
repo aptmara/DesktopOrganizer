@@ -17,7 +17,11 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" 
-                                CornerRadius="6" Padding="4" BorderThickness="1" BorderBrush="Transparent">
+                                CornerRadius="6" Padding="4" BorderThickness="1" BorderBrush="Transparent"
+                                AllowDrop="True"
+                                PreviewMouseLeftButtonDown="ListBoxItem_PreviewMouseLeftButtonDown"
+                                PreviewMouseMove="ListBoxItem_PreviewMouseMove"
+                                Drop="ListBoxItem_Drop">
                             <ContentPresenter />
                             <Border.ContextMenu>
                                 <ContextMenu>

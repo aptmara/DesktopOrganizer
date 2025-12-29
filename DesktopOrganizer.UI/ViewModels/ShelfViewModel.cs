@@ -119,6 +119,24 @@ public class ShelfViewModel : ViewModelBase
         OnMoved();
     }
 
+    public void MoveItem(ShelfItemViewModel source, ShelfItemViewModel target)
+    {
+        int oldIndex = _items.IndexOf(source);
+        int newIndex = _items.IndexOf(target);
+
+        if (oldIndex != -1 && newIndex != -1)
+        {
+            _items.Move(oldIndex, newIndex);
+
+            // Modelも同期
+            var modelSource = _model.Items[oldIndex];
+            _model.Items.RemoveAt(oldIndex);
+            _model.Items.Insert(newIndex, modelSource);
+
+            _saveLayoutAction?.Invoke();
+        }
+    }
+
     public void RemoveItem(ShelfItemViewModel item)
     {
         _items.Remove(item);

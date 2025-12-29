@@ -131,6 +131,49 @@ public partial class ShelfControl : UserControl
         }
     }
 
+    private Point _dragStartPoint;
+
+    private void ListBoxItem_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+    }
+
+    private void ListBoxItem_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+        {
+            Point position = e.GetPosition(null);
+            if (Math.Abs(position.X - _dragStartPoint.X) > SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(position.Y - _dragStartPoint.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                if (sender is ListBoxItem listBoxItem && listBoxItem.DataContext is ShelfItemViewModel itemVm)
+                {
+                    // ドラッグ開始
+                    var data = new System.Windows.DataObject();
+                    data.SetData("ShelfItemReorder", itemVm); // 内部移動用マーカー
+                    System.Windows.DragDrop.DoDragDrop(listBoxItem, data, System.Windows.DragDropEffects.Move);
+                    e.Handled = true;
+                }
+            }
+        }
+    }
+
+    private void ListBoxItem_Drop(object sender, DragEventArgs e)
+    {
+        if (sender is ListBoxItem targetItem && targetItem.DataContext is ShelfItemViewModel targetVm)
+        {
+            if (e.Data.GetDataPresent("ShelfItemReorder"))
+            {
+                var sourceVm = e.Data.GetData("ShelfItemReorder") as ShelfItemViewModel;
+                if (sourceVm != null && sourceVm != targetVm && DataContext is ShelfViewModel shelfVm)
+                {
+                    shelfVm.MoveItem(sourceVm, targetVm);
+                    e.Handled = true;
+                }
+            }
+        }
+    }
+
     private void MenuItem_RenameShelf_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is ShelfViewModel vm)
