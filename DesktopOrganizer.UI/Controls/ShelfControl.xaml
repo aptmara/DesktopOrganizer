@@ -36,8 +36,6 @@
                                 <Setter TargetName="Bd" Property="Background" Value="#22FFFFFF"/>
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="#44FFFFFF"/>
                                 <Setter Property="Panel.ZIndex" Value="1"/>
-                                <EventSetter Event="MouseEnter" Handler="Item_MouseEnter"/>
-                                <EventSetter Event="MouseLeave" Handler="Item_MouseLeave"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
