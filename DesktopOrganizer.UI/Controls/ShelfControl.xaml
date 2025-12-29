@@ -16,8 +16,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border Background="{TemplateBinding Background}" 
-                                CornerRadius="4" Padding="4">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" 
+                                CornerRadius="6" Padding="4" BorderThickness="1" BorderBrush="Transparent">
                             <ContentPresenter />
                             <Border.ContextMenu>
                                 <ContextMenu>
@@ -27,6 +27,12 @@
                                 </ContextMenu>
                             </Border.ContextMenu>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#22FFFFFF"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#44FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -34,7 +40,13 @@
         <local:BooleanToOpacityConverter x:Key="BooleanToOpacityConverter"/>
     </UserControl.Resources>
     
-    <Border Background="#CC202020" CornerRadius="8" BorderBrush="#44FFFFFF" BorderThickness="1">
+    <Border CornerRadius="12" BorderBrush="#33FFFFFF" BorderThickness="1">
+        <Border.Background>
+            <SolidColorBrush Color="#CC1E1E24"/>
+        </Border.Background>
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Opacity="0.5"/>
+        </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -42,9 +54,16 @@
             </Grid.RowDefinitions>
             
             <!-- Header -->
-            <Border Background="#40000000" CornerRadius="8,8,0,0" Padding="8,4">
-                <TextBlock Text="{Binding Title}" Foreground="White" FontWeight="SemiBold" 
-                           VerticalAlignment="Center"/>
+            <Border CornerRadius="11,11,0,0" Padding="10,6">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#66000000" Offset="0"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <TextBlock Text="{Binding Title}" Foreground="#EEEEEE" FontWeight="SemiBold" 
+                           VerticalAlignment="Center" FontSize="14"
+                           TextTrimming="CharacterEllipsis"/>
             </Border>
             
             <!-- Items Area -->
@@ -58,11 +77,14 @@
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <StackPanel Width="64" Height="80" Margin="4" Opacity="{Binding IsBroken, Converter={StaticResource BooleanToOpacityConverter}}">
-                            <Image Source="{Binding Icon}" Width="32" Height="32" Margin="0,4"/>
-                            <TextBlock Text="{Binding Title}" Foreground="White" 
+                        <StackPanel Width="70" Height="86" Margin="4" Opacity="{Binding IsBroken, Converter={StaticResource BooleanToOpacityConverter}}">
+                            <Grid Width="48" Height="48" Margin="0,4,0,4">
+                                <Image Source="{Binding Icon}" HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                            <TextBlock Text="{Binding Title}" Foreground="#DDDDDD" 
                                        FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" MaxHeight="34"/>
+                                       TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="14"/>
                         </StackPanel>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
