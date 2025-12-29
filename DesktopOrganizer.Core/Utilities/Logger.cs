@@ -8,6 +8,27 @@ public static class Logger
 {
     private static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
     private static readonly object _lock = new();
+    private static bool _initialized = false;
+
+    public static void Initialize()
+    {
+        lock (_lock)
+        {
+            if (_initialized) return;
+            try
+            {
+                if (File.Exists(LogPath))
+                {
+                    File.Delete(LogPath);
+                }
+                _initialized = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to clear log file: {ex.Message}");
+            }
+        }
+    }
 
     public static void Log(string message, [System.Runtime.CompilerServices.CallerMemberName] string memberName = "", [System.Runtime.CompilerServices.CallerFilePath] string filePath = "")
     {

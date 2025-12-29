@@ -24,4 +24,41 @@ public class OverlayViewModel : ViewModelBase
     {
         Shelves.Add(shelf);
     }
+
+    public event EventHandler<System.Windows.Point>? CreateShelfRequested;
+    public event EventHandler<(System.Windows.Point Position, DesktopOrganizer.Core.Models.ShelfType Type)>? CreateTypedShelfRequested;
+    public event EventHandler? ToggleEditModeRequested;
+
+    public void RequestCreateShelf(System.Windows.Point position)
+    {
+        CreateShelfRequested?.Invoke(this, position);
+    }
+
+    public void RequestCreateTypedShelf(System.Windows.Point position, DesktopOrganizer.Core.Models.ShelfType type)
+    {
+        CreateTypedShelfRequested?.Invoke(this, (position, type));
+    }
+
+    public void RequestToggleEditMode()
+    {
+        ToggleEditModeRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public event EventHandler? ResetAllRequested;
+
+    public void RequestResetAll()
+    {
+        ResetAllRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void BringToFront(ShelfViewModel shelf)
+    {
+        if (Shelves.Count == 0) return;
+        var maxZ = Shelves.Max(s => s.ZIndex);
+        // 同じZIndexのものがいる場合も上げる
+        if (shelf.ZIndex < maxZ || Shelves.Any(s => s != shelf && s.ZIndex == maxZ))
+        {
+            shelf.ZIndex = maxZ + 1;
+        }
+    }
 }

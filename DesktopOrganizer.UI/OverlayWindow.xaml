@@ -8,7 +8,71 @@
         Title="OverlayWindow" Height="450" Width="800"
         WindowStyle="None" AllowsTransparency="True" Background="#01FFFFFF"
         ShowInTaskbar="False" ResizeMode="NoResize">
-    <Grid>
+    <Grid Background="Transparent" MouseLeftButtonDown="Grid_MouseLeftButtonDown">
+        <Grid.Resources>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        </Grid.Resources>
+        <Grid.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="新規シェルの作成">
+                    <MenuItem Header="📁 通常のシェル" Click="MenuItem_NewShelf_Click" Tag="Manual"/>
+                    <MenuItem Header="📂 スマートシェル (フォルダ同期)..." Click="MenuItem_NewShelf_Click" Tag="SmartFolder"/>
+                    <Separator/>
+                    <MenuItem Header="🕒 最近使ったファイル" Click="MenuItem_NewShelf_Click" Tag="Recents"/>
+                    <MenuItem Header="⏳ 一時保管シェル (24h)" Click="MenuItem_NewShelf_Click" Tag="Temp"/>
+                    <MenuItem Header="📝 クイックメモ" Click="MenuItem_NewShelf_Click" Tag="Memo"/>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="編集モード切替" Click="MenuItem_ToggleEditMode_Click"/>
+                <Separator/>
+                <MenuItem Header="全リセット" Click="MenuItem_ResetAll_Click"/>
+            </ContextMenu>
+        </Grid.ContextMenu>
+        
+        <!-- Background Overlay (Dim & Grid) -->
+        <Border IsHitTestVisible="False" Panel.ZIndex="-1">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Opacity" Value="0"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsEditMode}" Value="True">
+                            <Setter Property="Opacity" Value="1"/>
+                            <Setter Property="Background" Value="#66000000"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+        </Border>
+        
+        <!-- Grid Pattern (Only in Edit Mode) - Sparse Dots -->
+        <Border IsHitTestVisible="False" Panel.ZIndex="-1">
+            <Border.Background>
+                <DrawingBrush TileMode="Tile" Viewport="0,0,60,60" ViewportUnits="Absolute" Opacity="0.15">
+                    <DrawingBrush.Drawing>
+                        <GeometryDrawing Brush="#FFFFFF">
+                            <GeometryDrawing.Geometry>
+                                <GeometryGroup>
+                                    <EllipseGeometry Center="1,1" RadiusX="1.5" RadiusY="1.5"/>
+                                </GeometryGroup>
+                            </GeometryDrawing.Geometry>
+                        </GeometryDrawing>
+                    </DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Border.Background>
+            <Border.Style>
+                 <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsEditMode}" Value="True">
+                             <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+        </Border>
+
+
         <!-- ItemsControl to display shelves -->
         <ItemsControl x:Name="ShelvesContainer" ItemsSource="{Binding Shelves}">
             <ItemsControl.ItemsPanel>
@@ -18,10 +82,11 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemContainerStyle>
                 <Style TargetType="ContentPresenter">
-                    <Setter Property="Canvas.Left" Value="{Binding Left}" />
-                    <Setter Property="Canvas.Top" Value="{Binding Top}" />
-                    <Setter Property="Width" Value="{Binding Width}" />
-                    <Setter Property="Height" Value="{Binding Height}" />
+                    <Setter Property="Canvas.Left" Value="{Binding Left, Mode=OneWay}" />
+                    <Setter Property="Canvas.Top" Value="{Binding Top, Mode=OneWay}" />
+                    <Setter Property="Width" Value="{Binding Width, Mode=TwoWay}" />
+                    <Setter Property="Height" Value="{Binding Height, Mode=TwoWay}" />
+                    <Setter Property="Panel.ZIndex" Value="{Binding ZIndex}" />
                 </Style>
             </ItemsControl.ItemContainerStyle>
             <ItemsControl.ItemTemplate>
@@ -30,5 +95,30 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+
+        <!-- Edit Mode FAB (Floating Action Button) -->
+        <Button x:Name="AddShelfButton"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,40,40"
+                Width="56" Height="56"
+                Click="MenuItem_NewShelf_Click"
+                Panel.ZIndex="100">
+             <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource ModernButtonStyle}">
+                     <Setter Property="Visibility" Value="Collapsed"/>
+                     <Setter Property="Background" Value="{StaticResource BrandPrimaryBrush}"/>
+                     <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsEditMode}" Value="True">
+                             <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                         <Trigger Property="IsMouseOver" Value="True">
+                             <Setter Property="Background" Value="#88646cff"/>
+                         </Trigger>
+                     </Style.Triggers>
+                </Style>
+            </Button.Style>
+            <Path Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" 
+                  Fill="White" Stretch="Uniform" Width="24" Height="24"/>
+        </Button>
     </Grid>
 </Window>

@@ -51,11 +51,28 @@ public class LayoutManager
             var options = new JsonSerializerOptions { WriteIndented = true };
             var json = JsonSerializer.Serialize(CurrentLayout, options);
             File.WriteAllText(_layoutPath, json);
-            Utilities.Logger.Log($"Layout saved to {_layoutPath}");
+            DesktopOrganizer.Core.Utilities.Logger.Log($"Layout saved to {_layoutPath}");
         }
         catch (Exception ex)
         {
-            Utilities.Logger.LogError("Failed to save layout.", ex);
+            DesktopOrganizer.Core.Utilities.Logger.LogError("Failed to save layout.", ex);
+        }
+    }
+
+    public void ResetLayout()
+    {
+        try
+        {
+            if (File.Exists(_layoutPath))
+            {
+                File.Delete(_layoutPath);
+                DesktopOrganizer.Core.Utilities.Logger.Log($"Layout reset: {_layoutPath}");
+            }
+            CurrentLayout = new LayoutData();
+        }
+        catch (Exception ex)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError("Failed to reset layout.", ex);
         }
     }
 
@@ -112,10 +129,18 @@ public class LayoutManager
         if (waWidth == 0) waWidth = 1920;
         if (waHeight == 0) waHeight = 1080;
 
-        shelf.X = (double)(currentRect.Left - monitor.WorkArea.Left) / waWidth;
-        shelf.Y = (double)(currentRect.Top - monitor.WorkArea.Top) / waHeight;
-        shelf.Width = (double)currentRect.Width / waWidth;
-        shelf.Height = (double)currentRect.Height / waHeight;
+        double rawX = (double)(currentRect.Left - monitor.WorkArea.Left) / waWidth;
+        double rawY = (double)(currentRect.Top - monitor.WorkArea.Top) / waHeight;
+        double rawW = (double)currentRect.Width / waWidth;
+        double rawH = (double)currentRect.Height / waHeight;
+
+        // 座標を0.0 - 1.0にクランプ (画面外への消失防止)
+        shelf.X = Math.Clamp(rawX, 0.0, 1.0 - rawW);
+        shelf.Y = Math.Clamp(rawY, 0.0, 1.0 - rawH);
+
+        // 幅・高さも異常値を防止
+        shelf.Width = Math.Clamp(rawW, 0.05, 1.0);
+        shelf.Height = Math.Clamp(rawH, 0.05, 1.0);
 
         shelf.TargetMonitorDeviceId = monitor.DeviceName;
 
