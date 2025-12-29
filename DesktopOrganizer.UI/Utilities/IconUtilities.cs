@@ -13,17 +13,25 @@ public static class IconUtilities
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool DeleteObject(IntPtr hObject);
 
+    private static readonly Dictionary<string, ImageSource> _iconCache = new();
+
     public static ImageSource? GetIconFromPath(string path)
     {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (_iconCache.TryGetValue(path, out var cached)) return cached;
+
         if (!File.Exists(path) && !Directory.Exists(path)) return null;
 
         try
         {
-            // System.Drawing (Windowsのみ) を使用した簡易抽出
             using var icon = Icon.ExtractAssociatedIcon(path);
             if (icon == null) return null;
 
-            return ToImageSource(icon);
+            var image = ToImageSource(icon);
+            image.Freeze(); // 異なるスレッドからアクセス可能にするために必須
+
+            _iconCache[path] = image;
+            return image;
         }
         catch
         {

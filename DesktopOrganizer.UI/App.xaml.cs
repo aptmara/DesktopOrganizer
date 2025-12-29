@@ -42,6 +42,7 @@ public partial class App : System.Windows.Application
 
         _trayIcon.Initialize();
         _trayIcon.ToggleEditModeRequested += OnToggleEditMode;
+        _trayIcon.CreateShelfRequested += OnCreateShelfRequested;
         _trayIcon.ExitRequested += (s, args) => Shutdown();
 
         InitializeOverlayWindows();
@@ -115,6 +116,24 @@ public partial class App : System.Windows.Application
 
                         _layoutManager.UpdateShelfPosition(shelfModel, rect, monitor);
                         _layoutManager.SaveLayout();
+                        _layoutManager.SaveLayout();
+                    };
+
+                    shelfVm.DeleteRequested += (s, args) =>
+                    {
+                        vm.Shelves.Remove(shelfVm);
+                        _layoutManager.CurrentLayout.Shelves.Remove(shelfModel);
+                        _layoutManager.SaveLayout();
+                    };
+
+                    shelfVm.RenameRequested += (s, args) =>
+                    {
+                        var dialog = new Controls.RenameDialog(shelfVm.Title);
+                        if (dialog.ShowDialog() == true)
+                        {
+                            shelfVm.Title = dialog.ResultName;
+                            _layoutManager.SaveLayout();
+                        }
                     };
 
                     vm.AddShelf(shelfVm);
@@ -137,6 +156,89 @@ public partial class App : System.Windows.Application
             // 多重登録防止
             _inputService.ToggleEditModeRequested -= OnToggleEditMode;
             _inputService.ToggleEditModeRequested += OnToggleEditMode;
+        }
+    }
+
+    private void OnCreateShelfRequested(object? sender, EventArgs e)
+    {
+        // 最初のウィンドウ（通常はプライマリ）を取得
+        var targetWindow = _windows.FirstOrDefault();
+        if (targetWindow == null || targetWindow.DataContext is not ViewModels.OverlayViewModel vm) return;
+
+        // モニタ情報の取得はMonitorServiceからの方が確実だが、
+        // ここではWindowに関連付いているLayoutManagerのロジックを再利用したい。
+        // 新規棚データ作成
+        var newShelf = new Core.Models.Shelf
+        {
+            Title = "New Shelf",
+            X = 0.4, // Center-ish
+            Y = 0.4,
+            Width = 0.2,
+            Height = 0.2,
+            Items = new List<Core.Models.ShelfItem>()
+        };
+
+        // LayoutManagerに追加
+        _layoutManager.CurrentLayout.Shelves.Add(newShelf);
+        var monitors = _monitorService.GetMonitors();
+        var monitor = monitors.FirstOrDefault(m => m.DeviceName == targetWindow.Title.Replace("Overlay - ", "")) ?? monitors.First();
+
+        // 配置ロジック再利用（既存コードの抽出が必要だが、ここではインラインで複製して実装）
+        var physRect = _layoutManager.CalculatePhysicalRect(newShelf, monitor);
+
+        var shelfVm = new ViewModels.ShelfViewModel(newShelf, _layoutManager.SaveLayout)
+        {
+            Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
+            Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
+            Width = physRect.Width / monitor.DpiScaleX,
+            Height = physRect.Height / monitor.DpiScaleY
+        };
+
+        shelfVm.ShelfMoved += (l, t, w, h) =>
+        {
+            var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
+            var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
+            var pWidth = (int)(w * monitor.DpiScaleX);
+            var pHeight = (int)(h * monitor.DpiScaleY);
+
+            var rect = new Core.Interop.NativeMethods.RECT
+            {
+                Left = pLeft,
+                Top = pTop,
+                Right = pLeft + pWidth,
+                Bottom = pTop + pHeight
+            };
+
+            _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
+            _layoutManager.SaveLayout();
+            _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
+            _layoutManager.SaveLayout();
+        };
+
+        shelfVm.DeleteRequested += (s, args) =>
+        {
+            vm.Shelves.Remove(shelfVm);
+            _layoutManager.CurrentLayout.Shelves.Remove(newShelf);
+            _layoutManager.SaveLayout();
+        };
+
+        shelfVm.RenameRequested += (s, args) =>
+        {
+            var dialog = new Controls.RenameDialog(shelfVm.Title);
+            if (dialog.ShowDialog() == true)
+            {
+                shelfVm.Title = dialog.ResultName;
+                _layoutManager.SaveLayout();
+            }
+        };
+
+        vm.AddShelf(shelfVm);
+        _layoutManager.SaveLayout();
+
+        // 編集モードをONにする
+        if (!_isEditMode)
+        {
+            OnToggleEditMode(this, EventArgs.Empty);
         }
     }
 

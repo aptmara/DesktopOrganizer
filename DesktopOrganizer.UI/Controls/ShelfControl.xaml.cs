@@ -25,6 +25,9 @@ public partial class ShelfControl : UserControl
         this.MouseLeftButtonUp += ShelfControl_MouseLeftButtonUp;
     }
 
+    private void Item_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e) { }
+    private void Item_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) { }
+
     private void ShelfControl_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         // 編集モードの場合のみドラッグを許可
@@ -124,6 +127,26 @@ public partial class ShelfControl : UserControl
                 {
                     vm.AddFile(file);
                 }
+            }
+        }
+    }
+
+    private void MenuItem_RenameShelf_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ShelfViewModel vm)
+        {
+            vm.RequestRename();
+        }
+    }
+
+    private void MenuItem_DeleteShelf_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ShelfViewModel vm)
+        {
+            var result = MessageBox.Show($"Are you sure you want to delete shelf '{vm.Title}'?", "Confirm Delete", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result == MessageBoxResult.Yes)
+            {
+                vm.RequestDelete();
             }
         }
     }

@@ -49,11 +49,16 @@ public class ShelfViewModel : ViewModelBase
     // アプリレベルで正規化座標に戻して保存する。
 
     public event Action<double, double, double, double>? ShelfMoved;
+    public event EventHandler? DeleteRequested;
+    public event EventHandler? RenameRequested;
 
     public void OnMoved()
     {
         ShelfMoved?.Invoke(Left, Top, Width, Height);
     }
+
+    public void RequestDelete() => DeleteRequested?.Invoke(this, EventArgs.Empty);
+    public void RequestRename() => RenameRequested?.Invoke(this, EventArgs.Empty);
 
     public string Title
     {
@@ -138,21 +143,30 @@ public class ShelfItemViewModel : ViewModelBase
     public string TargetPath => _model.TargetPath;
 
     private ImageSource? _icon;
-    public ImageSource? Icon
-    {
-        get
-        {
-            if (_icon == null && !string.IsNullOrEmpty(_model.TargetPath))
-            {
-                _icon = DesktopOrganizer.UI.Utilities.IconUtilities.GetIconFromPath(_model.TargetPath);
-            }
-            return _icon;
-        }
-    }
+    public ImageSource? Icon => _icon;
 
     public ShelfItemViewModel(ShelfItem model)
     {
         _model = model;
+        LoadIconAsync();
+    }
+
+    private void LoadIconAsync()
+    {
+        if (string.IsNullOrEmpty(_model.TargetPath)) return;
+
+        Task.Run(() =>
+        {
+            var icon = DesktopOrganizer.UI.Utilities.IconUtilities.GetIconFromPath(_model.TargetPath);
+            if (icon != null)
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    _icon = icon;
+                    OnPropertyChanged(nameof(Icon));
+                });
+            }
+        });
     }
 
     public bool IsBroken
