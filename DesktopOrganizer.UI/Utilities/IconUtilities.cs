@@ -148,6 +148,8 @@ public static class IconUtilities
                 Int32Rect.Empty,
                 BitmapSizeOptions.FromEmptyOptions());
 
+            // 異なるスレッドからアクセス可能にするために必須
+            wpfBitmap.Freeze();
             return wpfBitmap;
         }
         finally
