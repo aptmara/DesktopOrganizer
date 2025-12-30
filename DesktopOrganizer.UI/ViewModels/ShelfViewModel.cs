@@ -27,6 +27,7 @@ public class ShelfViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         _watcher?.Dispose();
+        _debounceTimer?.Dispose();
     }
 
     private ObservableCollection<ShelfItemViewModel> _items = new();
@@ -388,36 +389,81 @@ public class ShelfViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private readonly System.Object _eventLock = new System.Object();
+    private readonly List<FileSystemEventArgs> _pendingEvents = new List<FileSystemEventArgs>();
+    private System.Timers.Timer? _debounceTimer;
+
+    private void SetupDebounceTimer()
+    {
+        _debounceTimer = new System.Timers.Timer(200); // 200ms debounce window
+        _debounceTimer.AutoReset = false;
+        _debounceTimer.Elapsed += OnDebounceTimerElapsed;
+    }
+
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        DesktopOrganizer.Core.Utilities.Logger.Log($"FileChanged: {e.ChangeType} - {e.FullPath}");
-        // 頻繁な更新を防ぐためのデバウンスが必要かもしれないが、まずは直接同期呼び出し
-        // 実際にはファイルのロック等で失敗する可能性があるため、少し遅延させると良いが、
-        // ここではシンプルに再同期をかける。
-        // 個別の追加・削除を行う方が効率的。
+        DesktopOrganizer.Core.Utilities.Logger.Log($"FileChanged (Buffered): {e.ChangeType} - {e.FullPath}");
+
+        lock (_eventLock)
+        {
+            // Simple validation to avoid duplicates if needed, but for now just raw buffer
+            _pendingEvents.Add(e);
+
+            if (_debounceTimer == null) SetupDebounceTimer();
+
+            // Reset timer
+            _debounceTimer!.Stop();
+            _debounceTimer!.Start();
+        }
+    }
+
+    private void OnDebounceTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
+    {
+        List<FileSystemEventArgs> eventsToProcess;
+        lock (_eventLock)
+        {
+            eventsToProcess = new List<FileSystemEventArgs>(_pendingEvents);
+            _pendingEvents.Clear();
+        }
+
+        if (eventsToProcess.Count == 0) return;
 
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
-            if (e.ChangeType == WatcherChangeTypes.Created)
+            // If too many events, just do a full resync for safety and performance
+            if (eventsToProcess.Count > 50)
             {
-                AddFileInternal(e.FullPath);
+                DesktopOrganizer.Core.Utilities.Logger.Log($"Too many events ({eventsToProcess.Count}), triggering full sync.");
+                SyncFromDirectory();
             }
-            else if (e.ChangeType == WatcherChangeTypes.Deleted)
+            else
             {
-                var vm = _items.FirstOrDefault(i => i.TargetPath == e.FullPath);
-                if (vm != null) RemoveItemInternal(vm);
+                foreach (var ev in eventsToProcess)
+                {
+                    if (ev.ChangeType == WatcherChangeTypes.Created)
+                    {
+                        // Check if already exists to prevent duplicates from rapid events
+                        if (!_items.Any(i => i.TargetPath == ev.FullPath))
+                        {
+                            AddFileInternal(ev.FullPath);
+                        }
+                    }
+                    else if (ev.ChangeType == WatcherChangeTypes.Deleted)
+                    {
+                        var vm = _items.FirstOrDefault(i => i.TargetPath == ev.FullPath);
+                        if (vm != null) RemoveItemInternal(vm);
+                    }
+                }
             }
         });
     }
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
-        {
-            var vm = _items.FirstOrDefault(i => i.TargetPath == e.OldFullPath);
-            if (vm != null) RemoveItemInternal(vm);
-            AddFileInternal(e.FullPath);
-        });
+        // Treat Rename as Delete + Create for buffering simplicity
+        // This ensures correct ordering within the batch
+        OnFileChanged(sender, new FileSystemEventArgs(WatcherChangeTypes.Deleted, Path.GetDirectoryName(e.OldFullPath)!, Path.GetFileName(e.OldFullPath)));
+        OnFileChanged(sender, new FileSystemEventArgs(WatcherChangeTypes.Created, Path.GetDirectoryName(e.FullPath)!, Path.GetFileName(e.FullPath)));
     }
 
     private void AddFileInternal(string path)
@@ -447,6 +493,7 @@ public class ShelfViewModel : ViewModelBase, IDisposable
 
     private void RemoveItemInternal(ShelfItemViewModel vm)
     {
+        vm.Dispose(); // Cancel icon loading
         _items.Remove(vm);
         var modelItem = _model.Items.FirstOrDefault(i => i.TargetPath == vm.TargetPath);
         if (modelItem != null) _model.Items.Remove(modelItem);
@@ -814,45 +861,62 @@ public class ShelfItemViewModel : ViewModelBase
         LoadIconAsync();
     }
 
-    private void LoadIconAsync()
+    private CancellationTokenSource? _cts;
+
+    private async void LoadIconAsync()
     {
         if (string.IsNullOrEmpty(_model.TargetPath)) return;
 
-        Task.Run(async () =>
+        // Cancel previous request if any
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        try
         {
-            try
+            // 起動直後はファイルシステムがまだ準備できていない可能性があるため少し待機
+            await Task.Delay(50, token);
+
+            // Use the new Async Throttled method
+            var icon = await DesktopOrganizer.UI.Utilities.IconUtilities.GetIconAsync(_model.TargetPath, token);
+
+            // アイコン取得失敗時はリトライ（最大3回）
+            for (int retry = 0; retry < 3 && icon == null; retry++)
             {
-                // 起動直後はファイルシステムがまだ準備できていない可能性があるため少し待機
-                await Task.Delay(50);
+                if (token.IsCancellationRequested) return;
+                await Task.Delay(200 * (retry + 1), token);
+                icon = await DesktopOrganizer.UI.Utilities.IconUtilities.GetIconAsync(_model.TargetPath, token);
+            }
 
-                var icon = DesktopOrganizer.UI.Utilities.IconUtilities.GetIconFromPath(_model.TargetPath);
-
-                // アイコン取得失敗時はリトライ（最大3回）
-                for (int retry = 0; retry < 3 && icon == null; retry++)
+            if (icon != null && !token.IsCancellationRequested)
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null)
                 {
-                    await Task.Delay(200 * (retry + 1));
-                    icon = DesktopOrganizer.UI.Utilities.IconUtilities.GetIconFromPath(_model.TargetPath);
-                }
-
-                if (icon != null)
-                {
-                    // Application.Currentのnullチェック
-                    var app = System.Windows.Application.Current;
-                    if (app != null)
+                    // Use Dispatcher Priority Background to not block input
+                    await app.Dispatcher.InvokeAsync(() =>
                     {
-                        app.Dispatcher.Invoke(() =>
-                        {
-                            _icon = icon;
-                            OnPropertyChanged(nameof(Icon));
-                        });
-                    }
+                        _icon = icon;
+                        OnPropertyChanged(nameof(Icon));
+                    }, System.Windows.Threading.DispatcherPriority.Background); // Low priority
                 }
             }
-            catch (Exception ex)
-            {
-                DesktopOrganizer.Core.Utilities.Logger.LogError($"Failed to load icon: {_model.TargetPath}", ex);
-            }
-        });
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore
+        }
+        catch (Exception ex)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError($"Failed to load icon: {_model.TargetPath}", ex);
+        }
+    }
+
+    // Call this when removing item
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
     public bool IsBroken

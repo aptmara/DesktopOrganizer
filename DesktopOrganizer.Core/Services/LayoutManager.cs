@@ -5,7 +5,7 @@ using DesktopOrganizer.Core.Interop;
 
 namespace DesktopOrganizer.Core.Services;
 
-public class LayoutManager
+public class LayoutManager : ILayoutManager
 {
     private const string LAYOUT_FILENAME = "layout.json";
     private readonly string _layoutPath;

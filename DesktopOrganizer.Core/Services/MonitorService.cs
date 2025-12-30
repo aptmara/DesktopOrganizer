@@ -4,7 +4,7 @@ using DesktopOrganizer.Core.Models;
 
 namespace DesktopOrganizer.Core.Services;
 
-public class MonitorService
+public class MonitorService : IMonitorService
 {
     public List<MonitorItem> GetMonitors()
     {

@@ -246,6 +246,7 @@
             <!-- Items Area (Collapsible) -->
             <ListBox x:Name="ItemsListBox" Grid.Row="1" ItemsSource="{Binding Items}" 
                      Background="Transparent" BorderThickness="0"
+                     ScrollViewer.CanContentScroll="True"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                 <ListBox.Style>
                     <Style TargetType="ListBox">
@@ -259,7 +260,7 @@
                 </ListBox.Style>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" IsItemsHost="True"/>
+                        <local:VirtualizingWrapPanel />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>

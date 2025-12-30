@@ -21,34 +21,117 @@ public static class IconUtilities
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr hIcon);
 
-    // スレッドセーフなキャッシュ
-    private static readonly ConcurrentDictionary<string, ImageSource> _iconCache = new();
+    /// <summary>
+    /// LRU Cache Implementation - O(1) operations
+    /// Dictionary: path -> (ImageSource, LinkedListNode)
+    /// LinkedList: LRU order tracking (most recently used at First)
+    /// </summary>
+    private const int MaxCacheSize = 500;
+    private static readonly Dictionary<string, (ImageSource Image, LinkedListNode<string> Node)> _cache = new();
+    private static readonly LinkedList<string> _lruList = new();
+    private static readonly object _lock = new();
+
+    // Throttling: Max 4 concurrent icon extractions to prevent thread pool starvation
+    private static readonly SemaphoreSlim _semaphore = new(4);
 
     /// <summary>
-    /// パスからアイコンを取得する。
-    /// キャッシュ済みの場合はキャッシュから返す。
+    /// Asynchronously gets an icon from a path with caching and throttling.
     /// </summary>
-    public static ImageSource? GetIconFromPath(string path)
+    public static async Task<ImageSource?> GetIconAsync(string path, CancellationToken token = default)
     {
         if (string.IsNullOrEmpty(path)) return null;
 
-        // キャッシュチェック
-        if (_iconCache.TryGetValue(path, out var cached)) return cached;
+        // 1. Fast Cache Check (Sync) - O(1)
+        lock (_lock)
+        {
+            if (_cache.TryGetValue(path, out var cached))
+            {
+                // Move to MRU - O(1) via direct node reference
+                _lruList.Remove(cached.Node);
+                var newNode = _lruList.AddFirst(path);
+                _cache[path] = (cached.Image, newNode);
+                return cached.Image;
+            }
+        }
 
-        // ファイル/ディレクトリ存在チェック
-        if (!File.Exists(path) && !Directory.Exists(path)) return null;
+        // 2. Throttling
+        // Wait for a slot, respecting cancellation
+        await _semaphore.WaitAsync(token).ConfigureAwait(false);
 
         try
         {
+            // 3. Double-check cache after acquiring semaphore (race condition prevention)
+            lock (_lock)
+            {
+                if (_cache.TryGetValue(path, out var cached))
+                {
+                    // Move to MRU - O(1)
+                    _lruList.Remove(cached.Node);
+                    var newNode = _lruList.AddFirst(path);
+                    _cache[path] = (cached.Image, newNode);
+                    return cached.Image;
+                }
+            }
+
+            // 4. Heavy Extraction (on thread pool implicit via Task.Run if needed, but we are already async)
+            // Since ExtractAssociatedIcon is blocking and could take time, wrap in Task.Run if not already on a background thread.
+            // But usually this method is called from Task.Run. Let's assume called from ThreadPool.
+            // To be safe and non-blocking for the caller, we wrap the IO work.
+
+            return await Task.Run(() =>
+            {
+                if (token.IsCancellationRequested) return null;
+                return ExtractAndCache(path);
+            }, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.LogError($"Failed to get icon for: {path}", ex);
+            return null;
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
+    }
+
+    // Synchronous fallback (deprecated but kept for compatibility if needed, though we should migrate)
+    public static ImageSource? GetIconFromPath(string path)
+    {
+        // Sync version just calls async loop... bad practice but quick fix for now?
+        // No, let's keep the logic simple. If sync is called, we bypass semaphore or block?
+        // Let's reimplement sync to use cache but skip semaphore for backward compact OR just block.
+        // Better to discourage sync use.
+
+        // For now, simple implementation without throttling for legacy sync calls (risk of blockage)
+        // But we added LRU at least.
+        lock (_lock)
+        {
+            if (_cache.TryGetValue(path, out var cached)) return cached.Image;
+        }
+
+        var img = ExtractAndCache(path);
+        return img;
+    }
+
+    private static ImageSource? ExtractAndCache(string path)
+    {
+        try
+        {
+            // Validations
+            if (!File.Exists(path) && !Directory.Exists(path)) return null;
+
             ImageSource? image = null;
 
-            // .urlファイル（インターネットショートカット）の特別処理
             if (path.EndsWith(".url", StringComparison.OrdinalIgnoreCase))
             {
                 image = GetIconFromUrlFile(path);
             }
 
-            // 通常の方法で取得
             if (image == null)
             {
                 using var icon = Icon.ExtractAssociatedIcon(path);
@@ -60,23 +143,44 @@ public static class IconUtilities
 
             if (image != null)
             {
-                image.Freeze(); // 異なるスレッドからアクセス可能にするために必須
-                _iconCache.TryAdd(path, image);
+                image.Freeze();
+                AddToCache(path, image);
             }
 
             return image;
         }
-        catch (Exception ex)
+        catch
         {
-            DesktopOrganizer.Core.Utilities.Logger.LogError($"Failed to get icon for: {path}", ex);
             return null;
         }
     }
 
-    /// <summary>
-    /// .urlファイル（インターネットショートカット）からアイコンを取得。
-    /// Steam等のカスタムアイコンに対応。
-    /// </summary>
+    private static void AddToCache(string path, ImageSource image)
+    {
+        lock (_lock)
+        {
+            if (_cache.TryGetValue(path, out var existing))
+            {
+                // Update existing - O(1)
+                _lruList.Remove(existing.Node);
+            }
+            else if (_cache.Count >= MaxCacheSize)
+            {
+                // Evict LRU - O(1)
+                var last = _lruList.Last;
+                if (last != null)
+                {
+                    _cache.Remove(last.Value);
+                    _lruList.RemoveLast();
+                }
+            }
+
+            // Add new entry - O(1)
+            var node = _lruList.AddFirst(path);
+            _cache[path] = (image, node);
+        }
+    }
+
     private static ImageSource? GetIconFromUrlFile(string urlFilePath)
     {
         try
@@ -87,12 +191,10 @@ public static class IconUtilities
 
             foreach (var line in lines)
             {
-                // IconFile=C:\path\to\icon.exe または IconFile=C:\path\to\icon.ico
                 if (line.StartsWith("IconFile=", StringComparison.OrdinalIgnoreCase))
                 {
                     iconFile = line.Substring("IconFile=".Length).Trim();
                 }
-                // IconIndex=0
                 else if (line.StartsWith("IconIndex=", StringComparison.OrdinalIgnoreCase))
                 {
                     if (int.TryParse(line.Substring("IconIndex=".Length).Trim(), out var idx))
@@ -104,14 +206,12 @@ public static class IconUtilities
 
             if (!string.IsNullOrEmpty(iconFile) && File.Exists(iconFile))
             {
-                // .icoファイルの場合
                 if (iconFile.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
                 {
                     using var icon = new Icon(iconFile);
                     return ToImageSource(icon);
                 }
 
-                // .exe/.dllからアイコン抽出
                 IntPtr hIcon = ExtractIcon(IntPtr.Zero, iconFile, iconIndex);
                 if (hIcon != IntPtr.Zero && hIcon.ToInt64() > 1)
                 {
@@ -148,7 +248,6 @@ public static class IconUtilities
                 Int32Rect.Empty,
                 BitmapSizeOptions.FromEmptyOptions());
 
-            // 異なるスレッドからアクセス可能にするために必須
             wpfBitmap.Freeze();
             return wpfBitmap;
         }

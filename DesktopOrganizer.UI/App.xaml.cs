@@ -165,24 +165,8 @@ public partial class App : System.Windows.Application
                     Height = physRect.Height / monitor.DpiScaleY
                 };
 
-                shelfVm.ShelfMoved += (l, t, w, h) =>
-                {
-                    var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
-                    var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
-                    var pWidth = (int)(w * monitor.DpiScaleX);
-                    var pHeight = (int)(h * monitor.DpiScaleY);
-
-                    var rect = new Core.Interop.NativeMethods.RECT
-                    {
-                        Left = pLeft,
-                        Top = pTop,
-                        Right = pLeft + pWidth,
-                        Bottom = pTop + pHeight
-                    };
-
-                    _layoutManager.UpdateShelfPosition(shelfModel, rect, monitor);
-                    _layoutManager.SaveLayout();
-                };
+                // Use centralized handler
+                shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, shelfModel, monitor, l, t, w, h);
 
                 shelfVm.DeleteRequested += (s, args) =>
                 {
@@ -221,6 +205,105 @@ public partial class App : System.Windows.Application
 
         // Restore Edit Mode state
         window.SetEditMode(_isEditMode);
+    }
+
+    private void HandleShelfMoved(
+        ViewModels.ShelfViewModel shelfVm,
+        Core.Models.Shelf shelfModel,
+        Core.Models.MonitorItem currentMonitor,
+        double left, double top, double width, double height)
+    {
+        // 1. Calculate Physical Bounds in Screen Coordinates
+        var pLeft = (int)(left * currentMonitor.DpiScaleX) + currentMonitor.Bounds.Left;
+        var pTop = (int)(top * currentMonitor.DpiScaleY) + currentMonitor.Bounds.Top;
+        var pWidth = (int)(width * currentMonitor.DpiScaleX);
+        var pHeight = (int)(height * currentMonitor.DpiScaleY);
+
+        var centerX = pLeft + (pWidth / 2);
+        var centerY = pTop + (pHeight / 2);
+
+        // 2. Determine Target Monitor based on Center Point
+        var allMonitors = _monitorService.GetMonitors();
+        var targetMonitor = allMonitors.FirstOrDefault(m =>
+            centerX >= m.Bounds.Left && centerX < m.Bounds.Right &&
+            centerY >= m.Bounds.Top && centerY < m.Bounds.Bottom) ?? currentMonitor;
+
+        // 3. Check for Migration
+        if (targetMonitor.DeviceName != currentMonitor.DeviceName)
+        {
+            DesktopOrganizer.Core.Utilities.Logger.Log($"Migrating Shelf '{shelfModel.Title}' from {currentMonitor.DeviceName} to {targetMonitor.DeviceName}");
+
+            // A. Remove from current VM
+            var currentWindow = _windows.FirstOrDefault(w => w.Title == $"Overlay - {currentMonitor.DeviceName}");
+            if (currentWindow?.DataContext is ViewModels.OverlayViewModel currentVm)
+            {
+                currentVm.Shelves.Remove(shelfVm);
+            }
+
+            // B. Update Model to new context
+            var rect = new Core.Interop.NativeMethods.RECT
+            {
+                Left = pLeft,
+                Top = pTop,
+                Right = pLeft + pWidth,
+                Bottom = pTop + pHeight
+            };
+            _layoutManager.UpdateShelfPosition(shelfModel, rect, targetMonitor);
+
+            // C. Add to new VM
+            var targetWindow = _windows.FirstOrDefault(w => w.Title == $"Overlay - {targetMonitor.DeviceName}");
+            if (targetWindow?.DataContext is ViewModels.OverlayViewModel targetVm)
+            {
+                // Create new VM for the new context (or re-use if we refactor, but new is safer for binding context)
+                var physRect = _layoutManager.CalculatePhysicalRect(shelfModel, targetMonitor);
+                var newShelfVm = new ViewModels.ShelfViewModel(shelfModel, _layoutManager.SaveLayout)
+                {
+                    Left = (physRect.Left - targetMonitor.Bounds.Left) / targetMonitor.DpiScaleX,
+                    Top = (physRect.Top - targetMonitor.Bounds.Top) / targetMonitor.DpiScaleY,
+                    Width = physRect.Width / targetMonitor.DpiScaleX,
+                    Height = physRect.Height / targetMonitor.DpiScaleY
+                };
+
+                // Re-bind events
+                newShelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(newShelfVm, shelfModel, targetMonitor, l, t, w, h);
+                newShelfVm.DeleteRequested += (s, args) =>
+                {
+                    targetVm.Shelves.Remove(newShelfVm);
+                    _layoutManager.CurrentLayout.Shelves.Remove(shelfModel);
+                    _layoutManager.SaveLayout();
+                };
+                newShelfVm.RenameRequested += (s, args) =>
+                {
+                    var dialog = new Controls.RenameDialog(newShelfVm.Title);
+                    if (dialog.ShowDialog() == true)
+                    {
+                        newShelfVm.Title = dialog.ResultName;
+                        _layoutManager.SaveLayout();
+                    }
+                };
+
+                targetVm.AddShelf(newShelfVm);
+
+                // Hack: If we just added it, it might lose the "Dragging" state if we were continuously dragging.
+                // But this event is "ShelfMoved" (MouseUp usually, or forced update).
+                // If it's MouseUp, verified. 
+                // ShelfControl.cs calls OnMoved() on MouseLeftButtonUp. So this is a drop action. Perfect.
+            }
+        }
+        else
+        {
+            // Same Monitor - Just Update
+            var rect = new Core.Interop.NativeMethods.RECT
+            {
+                Left = pLeft,
+                Top = pTop,
+                Right = pLeft + pWidth,
+                Bottom = pTop + pHeight
+            };
+            _layoutManager.UpdateShelfPosition(shelfModel, rect, currentMonitor);
+        }
+
+        _layoutManager.SaveLayout();
     }
 
     private void ToggleEditMode()
@@ -305,24 +388,7 @@ public partial class App : System.Windows.Application
             Height = physRect.Height / monitor.DpiScaleY
         };
 
-        shelfVm.ShelfMoved += (l, t, w, h) =>
-        {
-            var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
-            var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
-            var pWidth = (int)(w * monitor.DpiScaleX);
-            var pHeight = (int)(h * monitor.DpiScaleY);
-
-            var rect = new Core.Interop.NativeMethods.RECT
-            {
-                Left = pLeft,
-                Top = pTop,
-                Right = pLeft + pWidth,
-                Bottom = pTop + pHeight
-            };
-
-            _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
-            _layoutManager.SaveLayout();
-        };
+        shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, newShelf, monitor, l, t, w, h);
 
         shelfVm.DeleteRequested += (s, args) =>
         {
@@ -458,24 +524,7 @@ public partial class App : System.Windows.Application
             Height = physRect.Height / monitor.DpiScaleY
         };
 
-        shelfVm.ShelfMoved += (l, t, w, h) =>
-        {
-            var pLeft = (int)(l * monitor.DpiScaleX) + monitor.Bounds.Left;
-            var pTop = (int)(t * monitor.DpiScaleY) + monitor.Bounds.Top;
-            var pWidth = (int)(w * monitor.DpiScaleX);
-            var pHeight = (int)(h * monitor.DpiScaleY);
-
-            var rect = new Core.Interop.NativeMethods.RECT
-            {
-                Left = pLeft,
-                Top = pTop,
-                Right = pLeft + pWidth,
-                Bottom = pTop + pHeight
-            };
-
-            _layoutManager.UpdateShelfPosition(newShelf, rect, monitor);
-            _layoutManager.SaveLayout();
-        };
+        shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, newShelf, monitor, l, t, w, h);
 
         shelfVm.DeleteRequested += (s, args) =>
         {
