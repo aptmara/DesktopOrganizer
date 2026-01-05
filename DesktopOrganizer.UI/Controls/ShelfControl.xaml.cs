@@ -278,7 +278,7 @@ public partial class ShelfControl : UserControl
                 }
             }
 
-            // 外部ファイルドロップ
+            // External File Drop
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
@@ -307,13 +307,45 @@ public partial class ShelfControl : UserControl
             {
                 if (sender is ListBoxItem listBoxItem && listBoxItem.DataContext is ShelfItemViewModel itemVm)
                 {
-                    // ドラッグ開始（棚間移動対応）
-                    var data = new System.Windows.DataObject();
-                    data.SetData("ShelfItemReorder", itemVm); // 同一棚内並び替え用
-                    data.SetData("ShelfItemMove", itemVm);    // 棚間移動用
-                    data.SetData("SourceShelf", DataContext); // 元の棚
-                    System.Windows.DragDrop.DoDragDrop(listBoxItem, data, System.Windows.DragDropEffects.Move);
-                    e.Handled = true;
+                    // Check Edit Mode
+                    // Note: IsEditMode is a property of the control/UserControl
+                    if (!IsEditMode)
+                    {
+                        return;
+                    }
+
+                    if (DataContext is ShelfViewModelBase shelfVm)
+                    {
+                        // スマートシェルフ（DirectoryPathが設定されている）は並び替え不可（OSファイルシステム順序依存のため）
+                        // ただし、もしスマートシェルでもカスタムソートを許容するならここを変更。
+                        // 今回の要件「スマートシェルは非対象」に従い、ディレクトリパスがある場合は禁止
+                        if (!string.IsNullOrEmpty(shelfVm.DirectoryPath))
+                        {
+                            // スマートシェルの場合はドラッグ自体を開始しない（または並び替えデータを付与しない）
+                            // 外部へのドラッグ（コピー/移動）は許可したいか？
+                            // 一旦「並び替え」は禁止するが、外部ドロップは許可するデータを作成する
+                        }
+
+                        // ソートモードがNoneでないと手動並び替えは無意味（即座に再ソートされるため）
+                        if (shelfVm.SortOption != DesktopOrganizer.Core.Models.ShelfSortOption.None)
+                        {
+                            return;
+                        }
+
+                        // ドラッグ開始
+                        var data = new System.Windows.DataObject();
+
+                        // スマートシェルでない場合のみReorderデータをセット
+                        if (string.IsNullOrEmpty(shelfVm.DirectoryPath))
+                        {
+                            data.SetData("ShelfItemReorder", itemVm);
+                        }
+
+                        data.SetData("ShelfItemMove", itemVm);    // 棚間移動用
+                        data.SetData("SourceShelf", DataContext); // 元の棚
+                        var result = System.Windows.DragDrop.DoDragDrop(listBoxItem, data, System.Windows.DragDropEffects.Move);
+                        e.Handled = true;
+                    }
                 }
             }
         }
@@ -439,14 +471,12 @@ public partial class ShelfControl : UserControl
                     targetShelf.AcceptItem(sourceItem);
                     sourceShelf.RemoveItem(sourceItem);
 
-                    // Move to specific index if we have one (last item is the newly added one)
+                    // Move to specific index if we have one
                     if (_targetInsertionIndex != -1)
                     {
                         var newItem = targetShelf.Items.LastOrDefault();
                         if (newItem != null)
                         {
-                            // Adjust index if necessary (since we just added at end)
-                            // If _targetInsertionIndex > Count, cap it.
                             int count = targetShelf.Items.Count;
                             int finalIndex = Math.Min(_targetInsertionIndex, count - 1);
                             targetShelf.MoveItem(newItem, finalIndex);
@@ -454,6 +484,22 @@ public partial class ShelfControl : UserControl
                     }
                     e.Handled = true;
                 }
+            }
+            // External File Drop
+            else if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                DesktopOrganizer.Core.Utilities.Logger.Log($"[ItemsListBox_Drop] FileDrop detected");
+                string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                DesktopOrganizer.Core.Utilities.Logger.Log($"[ItemsListBox_Drop] Files count: {files?.Length ?? 0}");
+                if (files != null)
+                {
+                    foreach (string file in files)
+                    {
+                        DesktopOrganizer.Core.Utilities.Logger.Log($"[ItemsListBox_Drop] Processing file: {file}");
+                        targetShelf.AddFile(file);
+                    }
+                }
+                e.Handled = true;
             }
         }
     }

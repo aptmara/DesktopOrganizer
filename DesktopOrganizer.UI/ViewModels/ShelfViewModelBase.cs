@@ -271,8 +271,10 @@ public abstract class ShelfViewModelBase : ViewModelBase, IDisposable
 
     // Dynamic sizing based on IconSize
     // Base padding + proportional padding for larger icons
-    public double ItemWidth => IconSize + 24 + (IconSize * 0.3);
-    public double ItemHeight => IconSize + 40 + (IconSize * 0.15);
+    // Width needs to accommodate text (at least 80px for short names)
+    public double ItemWidth => Math.Max(80, IconSize + 32 + (IconSize * 0.2));
+    // Height includes icon + 2 lines of text (~36px) + padding
+    public double ItemHeight => IconSize + 58 + (IconSize * 0.1);
 
     public string ThemeColor
     {
@@ -388,6 +390,8 @@ public abstract class ShelfViewModelBase : ViewModelBase, IDisposable
     /// </summary>
     protected void AddFileInternal(string path)
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log($"[AddFileInternal] Adding file: {path}");
+
         // ショートカットの解決を試みる（引数なしの場合のみ）
         string resolvedPath = path;
         if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
@@ -415,7 +419,9 @@ public abstract class ShelfViewModelBase : ViewModelBase, IDisposable
         };
 
         _model.Items.Add(item);
-        _items.Add(new ShelfItemViewModel(item, _saveLayoutAction));
+        var vm = new ShelfItemViewModel(item, _saveLayoutAction);
+        _items.Add(vm);
+        DesktopOrganizer.Core.Utilities.Logger.Log($"[AddFileInternal] Added item: {item.Title}, Items count: {_items.Count}");
     }
 
     /// <summary>
@@ -442,7 +448,12 @@ public abstract class ShelfViewModelBase : ViewModelBase, IDisposable
     /// </summary>
     public virtual void AddFile(string path)
     {
+        DesktopOrganizer.Core.Utilities.Logger.Log($"[AddFile] Called with path: {path}");
         AddFileInternal(path);
+
+        // Notify that the collection changed and layout needs refresh
+        OnPropertyChanged(nameof(Items));
+
         OnMoved();
     }
 
@@ -495,9 +506,14 @@ public abstract class ShelfViewModelBase : ViewModelBase, IDisposable
     /// </summary>
     public virtual void RemoveItem(ShelfItemViewModel item)
     {
+        item.Dispose();
         _items.Remove(item);
         var modelItem = _model.Items.FirstOrDefault(i => i.TargetPath == item.TargetPath && i.Title == item.Title);
         if (modelItem != null) _model.Items.Remove(modelItem);
+
+        // Notify UI to refresh
+        OnPropertyChanged(nameof(Items));
+
         _saveLayoutAction?.Invoke();
     }
 

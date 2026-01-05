@@ -35,7 +35,65 @@ public static class IconUtilities
 
     private const uint SHGFI_ICON = 0x100;
     private const uint SHGFI_LARGEICON = 0x0; // 32x32
+    private const uint SHGFI_SYSICONINDEX = 0x4000;
     private const uint SHGFI_USEFILEATTRIBUTES = 0x10;
+
+    // Image list types for SHGetImageList
+    private const int SHIL_LARGE = 0;      // 32x32
+    private const int SHIL_SMALL = 1;      // 16x16
+    private const int SHIL_EXTRALARGE = 2; // 48x48
+    private const int SHIL_JUMBO = 4;      // 256x256
+
+    [DllImport("shell32.dll", EntryPoint = "#727")]
+    private static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern IntPtr ImageList_GetIcon(IntPtr himl, int i, uint flags);
+
+    [ComImport]
+    [Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IImageList
+    {
+        [PreserveSig]
+        int Add(IntPtr hbmImage, IntPtr hbmMask, ref int pi);
+        [PreserveSig]
+        int ReplaceIcon(int i, IntPtr hicon, ref int pi);
+        [PreserveSig]
+        int SetOverlayImage(int iImage, int iOverlay);
+        [PreserveSig]
+        int Replace(int i, IntPtr hbmImage, IntPtr hbmMask);
+        [PreserveSig]
+        int AddMasked(IntPtr hbmImage, int crMask, ref int pi);
+        [PreserveSig]
+        int Draw(ref IMAGELISTDRAWPARAMS pimldp);
+        [PreserveSig]
+        int Remove(int i);
+        [PreserveSig]
+        int GetIcon(int i, uint flags, ref IntPtr picon);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IMAGELISTDRAWPARAMS
+    {
+        public int cbSize;
+        public IntPtr himl;
+        public int i;
+        public IntPtr hdcDst;
+        public int x;
+        public int y;
+        public int cx;
+        public int cy;
+        public int xBitmap;
+        public int yBitmap;
+        public int rgbBk;
+        public int rgbFg;
+        public int fStyle;
+        public int dwRop;
+        public int fState;
+        public int Frame;
+        public int crEffect;
+    }
 
     /// <summary>
     /// LRU Cache Implementation - O(1) operations
@@ -275,20 +333,55 @@ public static class IconUtilities
     {
         try
         {
+            // First get the icon index from the system image list
             SHFILEINFO shinfo = new SHFILEINFO();
-            // SHGFI_ICON | SHGFI_LARGEICON
-            IntPtr hImg = SHGetFileInfo(path, 0, ref shinfo, (uint)Marshal.SizeOf(shinfo), SHGFI_ICON | SHGFI_LARGEICON);
+            IntPtr hImg = SHGetFileInfo(path, 0, ref shinfo, (uint)Marshal.SizeOf(shinfo), SHGFI_SYSICONINDEX);
 
-            if (shinfo.hIcon == IntPtr.Zero) return null;
+            if (hImg == IntPtr.Zero) return null;
+
+            int iconIndex = shinfo.iIcon;
+
+            // Try to get jumbo icon (256x256) first, then fallback to extra large (48x48)
+            ImageSource? result = GetIconFromImageList(iconIndex, SHIL_JUMBO);
+            if (result == null)
+            {
+                result = GetIconFromImageList(iconIndex, SHIL_EXTRALARGE);
+            }
+            if (result == null)
+            {
+                result = GetIconFromImageList(iconIndex, SHIL_LARGE);
+            }
+
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static ImageSource? GetIconFromImageList(int iconIndex, int imageListType)
+    {
+        try
+        {
+            Guid iidImageList = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+            int hr = SHGetImageList(imageListType, ref iidImageList, out IImageList imgList);
+
+            if (hr != 0 || imgList == null) return null;
+
+            IntPtr hIcon = IntPtr.Zero;
+            hr = imgList.GetIcon(iconIndex, 0, ref hIcon);
+
+            if (hr != 0 || hIcon == IntPtr.Zero) return null;
 
             try
             {
-                using var icon = Icon.FromHandle(shinfo.hIcon);
+                using var icon = Icon.FromHandle(hIcon);
                 return ToImageSource(icon);
             }
             finally
             {
-                DestroyIcon(shinfo.hIcon);
+                DestroyIcon(hIcon);
             }
         }
         catch

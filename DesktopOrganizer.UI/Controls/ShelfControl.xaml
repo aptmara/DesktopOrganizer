@@ -80,19 +80,33 @@
 
         <!-- File Item Template (Standard) -->
         <DataTemplate x:Key="FileItemTemplate">
-            <StackPanel Width="{Binding DataContext.ItemWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" 
-                        Height="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=UserControl}}" 
-                        Margin="4">
-                <Grid Width="{Binding DataContext.IconSize, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+            <Grid Width="{Binding DataContext.ItemWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+                  Height="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                  Margin="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                
+                <!-- Icon -->
+                <Grid Grid.Row="0"
+                      Width="{Binding DataContext.IconSize, RelativeSource={RelativeSource AncestorType=UserControl}}" 
                       Height="{Binding DataContext.IconSize, RelativeSource={RelativeSource AncestorType=UserControl}}" 
-                      Margin="0,4,0,4">
+                      Margin="0,2,0,0" HorizontalAlignment="Center">
                     <Image Source="{Binding Icon}" HorizontalAlignment="Center" VerticalAlignment="Center" 
                            RenderOptions.BitmapScalingMode="HighQuality"/>
                 </Grid>
-                <Grid>
-                    <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextSecondaryBrush}" 
-                               FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
-                               TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="14">
+                
+                <!-- Text Area -->
+                <Grid Grid.Row="1" HorizontalAlignment="Stretch" ClipToBounds="True">
+                    <!-- Text shadow for better contrast -->
+                    <TextBlock Text="{Binding Title}" Foreground="#80000000" 
+                               FontSize="11" FontWeight="Medium" TextWrapping="Wrap" TextAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="15" LineStackingStrategy="BlockLineHeight"
+                               Margin="1,1,0,0"/>
+                    <TextBlock Text="{Binding Title}" Foreground="White" 
+                               FontSize="11" FontWeight="Medium" TextWrapping="Wrap" TextAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="15" LineStackingStrategy="BlockLineHeight">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Visibility" Value="Visible"/>
@@ -121,7 +135,7 @@
                         </TextBox.Style>
                     </TextBox>
                 </Grid>
-            </StackPanel>
+            </Grid>
         </DataTemplate>
 
         <!-- Memo Item Template (Sticky Note) -->
@@ -411,7 +425,11 @@
             <ListBox x:Name="ItemsListBox" Grid.Row="1" ItemsSource="{Binding Items}" 
                      Background="Transparent" BorderThickness="0"
                      ScrollViewer.CanContentScroll="False"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     AllowDrop="True"
+                     Drop="ItemsListBox_Drop"
+                     DragOver="ItemsListBox_DragOver"
+                     DragLeave="ItemsListBox_DragLeave">
                 <ListBox.Resources>
                     <infra:ShelfItemTemplateSelector x:Key="ShelfItemTemplateSelector"
                                                      FileItemTemplate="{StaticResource FileItemTemplate}"

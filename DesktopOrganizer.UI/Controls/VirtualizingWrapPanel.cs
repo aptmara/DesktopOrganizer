@@ -64,41 +64,80 @@ namespace DesktopOrganizer.UI.Controls
 
         protected override Size MeasureOverride(Size availableSize)
         {
-            UpdateScrollInfo(availableSize, _extent);
-
             var itemsControl = ItemsControl.GetItemsOwner(this);
             int itemCount = itemsControl?.HasItems == true ? itemsControl.Items.Count : 0;
 
             if (itemCount == 0)
+            {
+                _extent = new Size(0, 0);
+                UpdateScrollInfo(availableSize, _extent);
                 return new Size(0, 0);
+            }
 
             double itemW = ItemWidth;
             double itemH = ItemHeight;
 
-            int itemsPerRow = Math.Max(1, (int)(availableSize.Width / itemW));
+            // Handle infinite width - use ScrollOwner's viewport or find parent container width
+            double constrainedWidth = availableSize.Width;
+            if (double.IsInfinity(constrainedWidth) || constrainedWidth <= 0)
+            {
+                // First try ScrollOwner's viewport width
+                if (ScrollOwner != null && ScrollOwner.ViewportWidth > 0)
+                {
+                    constrainedWidth = ScrollOwner.ViewportWidth;
+                }
+                else
+                {
+                    // Try to get width from parent, looking for a meaningful container
+                    var parent = VisualTreeHelper.GetParent(this) as FrameworkElement;
+                    while (parent != null)
+                    {
+                        // Skip scroll-related containers that may have infinite width
+                        if (parent is ScrollContentPresenter || parent is ScrollViewer)
+                        {
+                            parent = VisualTreeHelper.GetParent(parent) as FrameworkElement;
+                            continue;
+                        }
+
+                        if (parent.ActualWidth > 0 && !double.IsNaN(parent.ActualWidth) && !double.IsInfinity(parent.ActualWidth))
+                        {
+                            constrainedWidth = parent.ActualWidth;
+                            break;
+                        }
+                        parent = VisualTreeHelper.GetParent(parent) as FrameworkElement;
+                    }
+                }
+
+                // Fallback: use a default that shows at least some items
+                if (double.IsInfinity(constrainedWidth) || constrainedWidth <= 0)
+                {
+                    constrainedWidth = itemW * 5; // Show 5 items per row as fallback
+                }
+            }
+
+            int itemsPerRow = Math.Max(1, (int)(constrainedWidth / itemW));
             int rowCount = (int)Math.Ceiling((double)itemCount / itemsPerRow);
             double extentH = rowCount * itemH;
 
-            Size extent = new Size(availableSize.Width, extentH);
+            Size extent = new Size(constrainedWidth, extentH);
             if (extent != _extent)
             {
                 _extent = extent;
-                UpdateScrollInfo(availableSize, extent);
             }
+            UpdateScrollInfo(new Size(constrainedWidth, availableSize.Height), extent);
 
-            int firstRow = (int)Math.Floor(_offset.Y / itemH);
-            int lastRow = (int)Math.Ceiling((_offset.Y + availableSize.Height) / itemH);
+            // For non-virtualizing mode (CanContentScroll=False), we need to realize all items
+            // but still measure and arrange them in a wrap layout
+            int firstRow = 0;
+            int lastRow = rowCount - 1;
+            int firstIndex = 0;
+            int lastIndex = itemCount - 1;
 
-            firstRow = Math.Max(0, firstRow);
-            lastRow = Math.Min(rowCount - 1, lastRow);
-
-            int firstIndex = firstRow * itemsPerRow;
-            int lastIndex = Math.Min(itemCount - 1, ((lastRow + 1) * itemsPerRow) - 1);
-
-            // 1. Cleanup first
+            // Cleanup items outside visible range (in virtualizing mode)
+            // In non-virtualizing mode, this is less critical but still good for cleanup
             CleanUpItems(firstIndex, lastIndex);
 
-            // 2. Generate
+            // Generate all items
             IItemContainerGenerator generator = ItemContainerGenerator;
             GeneratorPosition startPos = generator.GeneratorPositionFromIndex(firstIndex);
 
@@ -122,17 +161,13 @@ namespace DesktopOrganizer.UI.Controls
                         if (isNewlyRealized)
                             generator.PrepareItemContainer(child);
                     }
-                    else
-                    {
-                        // Child is already in view, but we need to ensure it's at the correct visual index
-                        // This might be redundant if cleanup preserved order, but good for robustness
-                    }
 
                     child.Measure(new Size(itemW, itemH));
                 }
             }
 
-            return extent;
+            // Return the desired size - width is constrained, height is content-based
+            return new Size(constrainedWidth, extentH);
         }
 
         private void CleanUpItems(int minIndex, int maxIndex)
@@ -158,10 +193,18 @@ namespace DesktopOrganizer.UI.Controls
         {
             double itemW = ItemWidth;
             double itemH = ItemHeight;
+
+            // Handle infinite width - use stored extent width or find parent
             double availableW = finalSize.Width;
+            if (double.IsInfinity(availableW) || availableW <= 0)
+            {
+                // Use the width we calculated in MeasureOverride
+                availableW = _extent.Width > 0 ? _extent.Width : itemW * 5;
+            }
+
             int itemsPerRow = Math.Max(1, (int)(availableW / itemW));
 
-            UpdateScrollInfo(finalSize, _extent);
+            UpdateScrollInfo(new Size(availableW, finalSize.Height), _extent);
 
             for (int i = 0; i < InternalChildren.Count; i++)
             {
@@ -185,7 +228,7 @@ namespace DesktopOrganizer.UI.Controls
                 child.Arrange(curRect);
             }
 
-            return finalSize;
+            return new Size(availableW, _extent.Height);
         }
 
         //
