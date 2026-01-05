@@ -7,8 +7,15 @@ using MessageBox = System.Windows.MessageBox;
 using MenuItem = System.Windows.Controls.MenuItem;
 using DragEventArgs = System.Windows.DragEventArgs;
 using DataFormats = System.Windows.DataFormats;
+using DragDropEffects = System.Windows.DragDropEffects;
 using System.Windows.Input;
 using TextBox = System.Windows.Controls.TextBox;
+using System.Windows.Documents;
+using System.Windows.Media;
+using System.Globalization;
+using System.Windows.Data;
+using DesktopOrganizer.Core.Services;
+using DesktopOrganizer.UI.Infrastructure;
 
 namespace DesktopOrganizer.UI.Controls;
 
@@ -20,6 +27,11 @@ public partial class ShelfControl : UserControl
 
     public static RoutedCommand OpenItemCommand = new RoutedCommand();
     public static RoutedCommand RenameShelfCommand = new RoutedCommand();
+    public static IValueConverter ClockTypeConverter { get; } = new IsClockShelfConverter();
+
+    private InsertionAdorner? _insertionAdorner;
+    private AdornerLayer? _itemAdornerLayer;
+    private int _targetInsertionIndex = -1;
 
     public ShelfControl()
     {
@@ -49,7 +61,7 @@ public partial class ShelfControl : UserControl
 
     private void RenameShelfExecuted(object sender, System.Windows.Input.ExecutedRoutedEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             // edit mode時は名前変更を開始
             if (IsEditMode)
@@ -75,59 +87,56 @@ public partial class ShelfControl : UserControl
     private void Item_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e) { }
     private void Item_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) { }
 
+    private Point _startDragPointPhysical; // Start point in Screen Physical Pixels
+    private Vector _offsetFromControlOriginToMousePhysical; // Physical offset from control's top-left to mouse click
+    private DragGhostWindow? _ghostWindow;
+
     private void ShelfControl_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        // 親Window (OverlayWindow) のDataContext (OverlayViewModel) から IsEditMode を取得して判定
         var window = Window.GetWindow(this);
         if (window?.DataContext is OverlayViewModel overlayVm)
         {
-            if (DataContext is ShelfViewModel shelfVm)
+            if (DataContext is ShelfViewModelBase shelfVm)
             {
                 overlayVm.BringToFront(shelfVm);
             }
 
-            if (!overlayVm.IsEditMode)
-            {
-                // View Mode: ドラッグ不可、クリックは通す（内部のアイテムクリック等）
-                return;
-            }
+            if (!overlayVm.IsEditMode) return;
         }
         else
         {
-            // Fallback if context is missing
             return;
         }
 
-        if (DataContext is ShelfViewModel vm)
+        // Start Global Dragging using Ghost Window
+        if (DataContext is ShelfViewModelBase vm)
         {
-            // ViewModelの値を正とする (Visual Tree計算は不安定な場合があるため廃止)
-            _startPosition = new Point(vm.Left, vm.Top);
+            _isDragging = true;
 
-            // 座標基準をWindowに固定して取得
-            if (window != null)
-            {
-                DesktopOrganizer.Core.Utilities.Logger.Log($"Drag Start: Mouse={e.GetPosition(window)}, VM_Pos=({vm.Left},{vm.Top})");
-            }
-            else
-            {
-                DesktopOrganizer.Core.Utilities.Logger.Log($"Drag Start (Fallback): Mouse={e.GetPosition(null)}, VM_Pos=({vm.Left},{vm.Top})");
-            }
+            // Capture Start Point (Physical Screen Coordinates) for accurate Delta calculation
+            _startDragPointPhysical = PointToScreen(e.GetPosition(this));
+
+            // Calculate the physical offset from the control's top-left to the mouse click point
+            var controlOriginPhysical = PointToScreen(new Point(0, 0));
+            _offsetFromControlOriginToMousePhysical = _startDragPointPhysical - controlOriginPhysical;
+
+            // Get DPI of current control
+            var dpi = VisualTreeHelper.GetDpi(this);
+
+            _ghostWindow = new DragGhostWindow(this, this.ActualWidth, this.ActualHeight);
+
+            // Convert controlOriginPhysical to Logical Coordinates for Window positioning
+            // Subtract 20 logical pixels to account for the Margin="20" in DragGhostWindow
+            _ghostWindow.Left = (controlOriginPhysical.X / dpi.DpiScaleX) - 20;
+            _ghostWindow.Top = (controlOriginPhysical.Y / dpi.DpiScaleY) - 20;
+            _ghostWindow.Show();
+
+            // Hide actual control
+            this.Opacity = 0.2;
+
+            this.CaptureMouse();
+            e.Handled = true;
         }
-
-        // Setup Dragging State LAST to avoid premature MouseMove event
-        if (window != null)
-        {
-            _startPoint = e.GetPosition(window);
-        }
-        else
-        {
-            _startPoint = e.GetPosition(null);
-        }
-
-        _isDragging = true;
-        this.CaptureMouse();
-
-        e.Handled = true; // イベントをここで消費し、OverlayWindowへの伝播（Edit終了）を防ぐ
     }
 
     private bool IsEditMode
@@ -145,36 +154,33 @@ public partial class ShelfControl : UserControl
 
     private void ShelfControl_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (_isDragging && DataContext is ShelfViewModel vm)
+        if (_isDragging && _ghostWindow != null)
         {
-            // Windowからの相対座標（論理ピクセル）
-            var window = Window.GetWindow(this);
-            Point currentPoint;
-            if (window != null)
-            {
-                currentPoint = e.GetPosition(window);
-            }
-            else
-            {
-                currentPoint = e.GetPosition(null);
-            }
+            // Current Mouse Position in Physical Screen Pixels
+            var currentMousePhysical = PointToScreen(e.GetPosition(this));
 
-            var deltaX = currentPoint.X - _startPoint.X;
-            var deltaY = currentPoint.Y - _startPoint.Y;
+            // Calculate the target physical top-left of the ghost window
+            // This maintains the initial offset from the mouse pointer
+            var targetGhostTopLeftPhysical = currentMousePhysical - _offsetFromControlOriginToMousePhysical;
 
-            double newLeft = _startPosition.X + deltaX;
-            double newTop = _startPosition.Y + deltaY;
+            // Get the DPI of the monitor where the ghost window currently resides
+            var ghostDpi = VisualTreeHelper.GetDpi(_ghostWindow);
 
-            if (ShelfViewModel.IsGridSnapEnabled)
+            // Convert the target physical position to logical units for the ghost window
+            double newLeft = (targetGhostTopLeftPhysical.X / ghostDpi.DpiScaleX);
+            double newTop = (targetGhostTopLeftPhysical.Y / ghostDpi.DpiScaleY);
+
+            // Grid Snap for Ghost (apply to logical coordinates)
+            if (ShelfViewModelBase.IsGridSnapEnabled)
             {
-                double gs = ShelfViewModel.GridSize;
-                // Snap logic: Round to nearest multiple of GridSize
+                double gs = ShelfViewModelBase.GridSize;
                 newLeft = Math.Round(newLeft / gs) * gs;
                 newTop = Math.Round(newTop / gs) * gs;
             }
 
-            vm.Left = newLeft;
-            vm.Top = newTop;
+            // Apply the -20 logical pixel padding compensation
+            _ghostWindow.Left = newLeft - 20;
+            _ghostWindow.Top = newTop - 20;
         }
     }
 
@@ -184,12 +190,44 @@ public partial class ShelfControl : UserControl
         {
             _isDragging = false;
             this.ReleaseMouseCapture();
+            this.Opacity = 1.0;
 
-            if (DataContext is ShelfViewModel vm)
+            if (_ghostWindow != null)
             {
-                vm.OnMoved();
+                double finalLeft = _ghostWindow.Left;
+                double finalTop = _ghostWindow.Top;
+
+                _ghostWindow.Close();
+                _ghostWindow = null;
+
+                if (DataContext is ShelfViewModelBase vm)
+                {
+                    var window = Window.GetWindow(this);
+
+                    // Convert Screen Coords back to Window Relative Coords
+                    // Window.Left/Top are physical screen coords in WPF usually (DPI aware)?
+                    // No, Window.Left/Top are logical units.
+
+                    double relativeLeft = finalLeft - window.Left;
+                    double relativeTop = finalTop - window.Top;
+
+                    vm.Left = relativeLeft;
+                    vm.Top = relativeTop;
+
+                    vm.OnMoved();
+                }
             }
         }
+    }
+
+    private Point GetDpiScale()
+    {
+        var source = PresentationSource.FromVisual(this);
+        if (source != null && source.CompositionTarget != null)
+        {
+            return new Point(source.CompositionTarget.TransformToDevice.M11, source.CompositionTarget.TransformToDevice.M22);
+        }
+        return new Point(1.0, 1.0);
     }
 
     private void MenuItem_Open_Click(object sender, RoutedEventArgs e)
@@ -207,7 +245,7 @@ public partial class ShelfControl : UserControl
 
         if (sender is MenuItem menuItem && menuItem.DataContext is ShelfItemViewModel itemVm)
         {
-            if (this.DataContext is ShelfViewModel shelfVm)
+            if (this.DataContext is ShelfViewModelBase shelfVm)
             {
                 shelfVm.RemoveItem(itemVm);
             }
@@ -216,13 +254,13 @@ public partial class ShelfControl : UserControl
 
     private void UserControl_Drop(object sender, System.Windows.DragEventArgs e)
     {
-        if (DataContext is ShelfViewModel targetShelf)
+        if (DataContext is ShelfViewModelBase targetShelf)
         {
             // 棚間アイテム移動
             if (e.Data.GetDataPresent("ShelfItemMove"))
             {
                 var sourceItem = e.Data.GetData("ShelfItemMove") as ShelfItemViewModel;
-                var sourceShelf = e.Data.GetData("SourceShelf") as ShelfViewModel;
+                var sourceShelf = e.Data.GetData("SourceShelf") as ShelfViewModelBase;
 
                 if (sourceItem != null && sourceShelf != null && sourceShelf != targetShelf)
                 {
@@ -281,16 +319,139 @@ public partial class ShelfControl : UserControl
         }
     }
 
-    private void ListBoxItem_Drop(object sender, DragEventArgs e)
+    private void RemoveAdorner()
     {
-        if (sender is ListBoxItem targetItem && targetItem.DataContext is ShelfItemViewModel targetVm)
+        if (_insertionAdorner != null && _itemAdornerLayer != null)
         {
+            _itemAdornerLayer.Remove(_insertionAdorner);
+            _insertionAdorner = null;
+        }
+        _targetInsertionIndex = -1;
+    }
+
+    private void ItemsListBox_DragLeave(object sender, DragEventArgs e)
+    {
+        RemoveAdorner();
+    }
+
+    private void ItemsListBox_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DragDropEffects.None;
+
+        if (!e.Data.GetDataPresent("ShelfItemReorder") && !e.Data.GetDataPresent("ShelfItemMove"))
+        {
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+
+        // Find the item under the mouse
+        var listBox = sender as System.Windows.Controls.ListBox;
+        if (listBox == null) return;
+
+        var pos = e.GetPosition(listBox);
+        var result = VisualTreeHelper.HitTest(listBox, pos);
+        if (result == null) return;
+
+        // Find ListBoxItem
+        var visual = result.VisualHit;
+        ListBoxItem? targetItem = null;
+        while (visual != null && visual != listBox)
+        {
+            if (visual is ListBoxItem item)
+            {
+                targetItem = item;
+                break;
+            }
+            visual = VisualTreeHelper.GetParent(visual);
+        }
+
+        if (_itemAdornerLayer == null)
+        {
+            _itemAdornerLayer = AdornerLayer.GetAdornerLayer(listBox);
+        }
+
+        if (targetItem != null && targetItem.DataContext is ShelfItemViewModel targetVm && listBox.ItemsSource is System.Collections.IList items)
+        {
+            int index = items.IndexOf(targetVm);
+
+            // Determine before/after
+            var itemPos = e.GetPosition(targetItem);
+            bool isAfter = itemPos.X > targetItem.ActualWidth / 2;
+
+            _targetInsertionIndex = isAfter ? index + 1 : index;
+
+            // Draw Adorner
+            if (_itemAdornerLayer != null)
+            {
+                if (_insertionAdorner == null)
+                {
+                    _insertionAdorner = new InsertionAdorner(listBox, new Point(), new Point());
+                    _itemAdornerLayer.Add(_insertionAdorner);
+                }
+
+                // Calculate line coordinates relative to ListBox
+                var transform = targetItem.TransformToAncestor(listBox);
+                var itemOrigin = transform.Transform(new Point(0, 0));
+
+                double x = itemOrigin.X + (isAfter ? targetItem.ActualWidth : 0);
+                double yTop = itemOrigin.Y;
+                double yBottom = itemOrigin.Y + targetItem.ActualHeight;
+
+                _insertionAdorner.UpdatePosition(new Point(x, yTop), new Point(x, yBottom));
+            }
+        }
+        else
+        {
+            // Hovering empty space - append to end?
+            // For now, remove adorner if not over item
+            RemoveAdorner();
+            _targetInsertionIndex = (listBox.ItemsSource as System.Collections.IList)?.Count ?? 0;
+        }
+    }
+
+    private void ItemsListBox_Drop(object sender, DragEventArgs e)
+    {
+        RemoveAdorner();
+
+        if (DataContext is ShelfViewModelBase targetShelf)
+        {
+            // Internal Reorder
             if (e.Data.GetDataPresent("ShelfItemReorder"))
             {
-                var sourceVm = e.Data.GetData("ShelfItemReorder") as ShelfItemViewModel;
-                if (sourceVm != null && sourceVm != targetVm && DataContext is ShelfViewModel shelfVm)
+                var sourceItem = e.Data.GetData("ShelfItemReorder") as ShelfItemViewModel;
+                if (sourceItem != null && _targetInsertionIndex != -1)
                 {
-                    shelfVm.MoveItem(sourceVm, targetVm);
+                    targetShelf.MoveItem(sourceItem, _targetInsertionIndex);
+                    e.Handled = true;
+                }
+            }
+            // Move from another Shelf
+            else if (e.Data.GetDataPresent("ShelfItemMove"))
+            {
+                var sourceItem = e.Data.GetData("ShelfItemMove") as ShelfItemViewModel;
+                var sourceShelf = e.Data.GetData("SourceShelf") as ShelfViewModelBase;
+
+                if (sourceItem != null && sourceShelf != null && sourceShelf != targetShelf)
+                {
+                    if (!string.IsNullOrEmpty(targetShelf.DirectoryPath)) return; // No drop on Smart Folder
+
+                    targetShelf.AcceptItem(sourceItem);
+                    sourceShelf.RemoveItem(sourceItem);
+
+                    // Move to specific index if we have one (last item is the newly added one)
+                    if (_targetInsertionIndex != -1)
+                    {
+                        var newItem = targetShelf.Items.LastOrDefault();
+                        if (newItem != null)
+                        {
+                            // Adjust index if necessary (since we just added at end)
+                            // If _targetInsertionIndex > Count, cap it.
+                            int count = targetShelf.Items.Count;
+                            int finalIndex = Math.Min(_targetInsertionIndex, count - 1);
+                            targetShelf.MoveItem(newItem, finalIndex);
+                        }
+                    }
                     e.Handled = true;
                 }
             }
@@ -299,7 +460,7 @@ public partial class ShelfControl : UserControl
 
     private void MenuItem_RenameShelf_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             vm.RequestRename();
         }
@@ -307,7 +468,7 @@ public partial class ShelfControl : UserControl
 
     private void MenuItem_DeleteShelf_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             var result = MessageBox.Show($"シェル '{vm.Title}' を削除してもよろしいですか？", "削除の確認", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result == MessageBoxResult.Yes)
@@ -319,19 +480,37 @@ public partial class ShelfControl : UserControl
 
     private void MenuItem_Color_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem menuItem && menuItem.Tag is string colorCode && DataContext is ShelfViewModel vm)
+        if (sender is MenuItem menuItem && menuItem.Tag is string colorCode && DataContext is ShelfViewModelBase vm)
         {
             vm.ThemeColor = colorCode;
         }
     }
 
+    private void MenuItem_DisplayMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem && menuItem.Tag is string modeTag && DataContext is ShelfViewModelBase vm)
+        {
+            if (Enum.TryParse<Core.Models.ShelfDisplayMode>(modeTag, out var mode))
+            {
+                vm.DisplayMode = mode;
+            }
+        }
+    }
+
     private void MenuItem_CustomColor_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             using var colorDialog = new System.Windows.Forms.ColorDialog();
             colorDialog.FullOpen = true; // フルカラーパレットを表示
             colorDialog.AnyColor = true;
+
+            // LayoutManagerからカスタムカラーを読み込む
+            var layoutManager = ServiceContainer.GetService<ILayoutManager>();
+            if (layoutManager?.CurrentLayout?.CustomColors != null && layoutManager.CurrentLayout.CustomColors.Length > 0)
+            {
+                colorDialog.CustomColors = layoutManager.CurrentLayout.CustomColors;
+            }
 
             // 現在の色を初期値として設定
             try
@@ -347,13 +526,20 @@ public partial class ShelfControl : UserControl
                 // 半透明（CC = 80%）を維持しつつ選択色を適用
                 var newColor = $"#CC{selectedColor.R:X2}{selectedColor.G:X2}{selectedColor.B:X2}";
                 vm.ThemeColor = newColor;
+
+                // カスタムカラーを保存
+                if (layoutManager != null)
+                {
+                    layoutManager.CurrentLayout.CustomColors = colorDialog.CustomColors;
+                    layoutManager.SaveLayout();
+                }
             }
         }
     }
 
     private void MenuItem_SmartShelf_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             using var dialog = new System.Windows.Forms.FolderBrowserDialog();
             dialog.Description = "このシェルにリンクするフォルダを選択してください（スマートシェルフ）";
@@ -364,6 +550,18 @@ public partial class ShelfControl : UserControl
             {
                 vm.Title = System.IO.Path.GetFileName(dialog.SelectedPath); // タイトルをフォルダ名に更新
                 vm.DirectoryPath = dialog.SelectedPath; // これでSmart Shelf化される
+            }
+        }
+    }
+
+    private void MenuItem_FilterSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ViewModels.ShelfViewModelBase vm)
+        {
+            var dialog = new FilterSettingsDialog(vm.FilterPattern ?? "");
+            if (dialog.ShowDialog() == true)
+            {
+                vm.FilterPattern = dialog.ResultPattern;
             }
         }
     }
@@ -397,7 +595,7 @@ public partial class ShelfControl : UserControl
     {
         if (sender is MenuItem menuItem)
         {
-            ShelfViewModel.IsGridSnapEnabled = menuItem.IsChecked;
+            ShelfViewModelBase.IsGridSnapEnabled = menuItem.IsChecked;
         }
     }
 
@@ -405,7 +603,7 @@ public partial class ShelfControl : UserControl
     {
         if (sender is MenuItem menuItem)
         {
-            menuItem.IsChecked = ShelfViewModel.IsGridSnapEnabled;
+            menuItem.IsChecked = ShelfViewModelBase.IsGridSnapEnabled;
         }
     }
 
@@ -418,12 +616,20 @@ public partial class ShelfControl : UserControl
         }
     }
 
+    private void AddMemo_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MemoShelfViewModel memoVm)
+        {
+            memoVm.AddMemo();
+        }
+    }
+
     /// <summary>
     /// 並べ替えメニュー項目がクリックされた時の処理
     /// </summary>
     private void MenuItem_Sort_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem menuItem && menuItem.Tag is string sortTag && DataContext is ShelfViewModel vm)
+        if (sender is MenuItem menuItem && menuItem.Tag is string sortTag && DataContext is ShelfViewModelBase vm)
         {
             if (Enum.TryParse<DesktopOrganizer.Core.Models.ShelfSortOption>(sortTag, out var option))
             {
@@ -432,9 +638,17 @@ public partial class ShelfControl : UserControl
         }
     }
 
+    private void MenuItem_IconSize_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem && double.TryParse(menuItem.Tag?.ToString(), out double size) && DataContext is ShelfViewModelBase vm)
+        {
+            vm.IconSize = size;
+        }
+    }
+
     private void ResizeHandle_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
     {
-        if (DataContext is ShelfViewModel vm)
+        if (DataContext is ShelfViewModelBase vm)
         {
             double newWidth = vm.Width + e.HorizontalChange;
             double newHeight = vm.Height + e.VerticalChange;
@@ -443,9 +657,9 @@ public partial class ShelfControl : UserControl
             newWidth = Math.Max(newWidth, 100);
             newHeight = Math.Max(newHeight, 100);
 
-            if (ShelfViewModel.IsGridSnapEnabled)
+            if (ShelfViewModelBase.IsGridSnapEnabled)
             {
-                double gs = ShelfViewModel.GridSize;
+                double gs = ShelfViewModelBase.GridSize;
                 newWidth = Math.Round(newWidth / gs) * gs;
                 newHeight = Math.Round(newHeight / gs) * gs;
             }
@@ -453,5 +667,48 @@ public partial class ShelfControl : UserControl
             vm.Width = newWidth;
             vm.Height = newHeight;
         }
+    }
+
+    private void ResizeHandle_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+    {
+        if (DataContext is ShelfViewModelBase vm)
+        {
+            // リサイズ完了時にサイズを保存
+            vm.OnMoved();
+        }
+    }
+}
+
+/// <summary>
+/// DataContextがClockShelfViewModelかどうかを判定するコンバーター
+/// </summary>
+public class IsClockShelfConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return value is ClockShelfViewModel;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// null または空文字列の場合にCollapsedを返すコンバーター
+/// </summary>
+public class NullToCollapsedConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value == null || (value is string s && string.IsNullOrEmpty(s)))
+            return Visibility.Collapsed;
+        return Visibility.Visible;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
     }
 }

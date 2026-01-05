@@ -134,7 +134,12 @@ public class LayoutManager : ILayoutManager
         double rawW = (double)currentRect.Width / waWidth;
         double rawH = (double)currentRect.Height / waHeight;
 
+        // 幅・高さが画面を超えないように制限
+        if (rawW > 1.0) rawW = 1.0;
+        if (rawH > 1.0) rawH = 1.0;
+
         // 座標を0.0 - 1.0にクランプ (画面外への消失防止)
+        // Note: rawW/rawH <= 1.0 is guaranteed above, so max (1.0 - rawW) >= 0.0
         shelf.X = Math.Clamp(rawX, 0.0, 1.0 - rawW);
         shelf.Y = Math.Clamp(rawY, 0.0, 1.0 - rawH);
 
@@ -146,4 +151,124 @@ public class LayoutManager : ILayoutManager
 
         Utilities.Logger.Log($"Shelf '{shelf.Title}' position updated. Norm: ({shelf.X:F3}, {shelf.Y:F3}) Monitor: {monitor.DeviceName}");
     }
+
+    #region Profile Management
+
+    private string ProfilesDir => Path.Combine(Path.GetDirectoryName(_layoutPath)!, "profiles");
+
+    public List<string> GetProfileNames()
+    {
+        if (!Directory.Exists(ProfilesDir))
+            return new List<string>();
+
+        return Directory.GetFiles(ProfilesDir, "*.json")
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(n => n != null)
+            .Cast<string>()
+            .ToList();
+    }
+
+    public void SaveProfileAs(string name)
+    {
+        try
+        {
+            Directory.CreateDirectory(ProfilesDir);
+            var profilePath = Path.Combine(ProfilesDir, $"{name}.json");
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            var json = JsonSerializer.Serialize(CurrentLayout, options);
+            File.WriteAllText(profilePath, json);
+            Utilities.Logger.Log($"Profile saved: {profilePath}");
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError($"Failed to save profile '{name}'.", ex);
+        }
+    }
+
+    public void LoadProfile(string name)
+    {
+        try
+        {
+            var profilePath = Path.Combine(ProfilesDir, $"{name}.json");
+            if (!File.Exists(profilePath))
+            {
+                Utilities.Logger.Log($"Profile not found: {profilePath}");
+                return;
+            }
+
+            var json = File.ReadAllText(profilePath);
+            CurrentLayout = JsonSerializer.Deserialize<LayoutData>(json) ?? new LayoutData();
+            Utilities.Logger.Log($"Profile loaded: {profilePath}");
+
+            // Also save as current layout
+            SaveLayout();
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError($"Failed to load profile '{name}'.", ex);
+        }
+    }
+
+    public void DeleteProfile(string name)
+    {
+        try
+        {
+            var profilePath = Path.Combine(ProfilesDir, $"{name}.json");
+            if (File.Exists(profilePath))
+            {
+                File.Delete(profilePath);
+                Utilities.Logger.Log($"Profile deleted: {profilePath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError($"Failed to delete profile '{name}'.", ex);
+        }
+    }
+
+    #region Backup & Restore
+
+    public void ExportLayout(string filePath)
+    {
+        try
+        {
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            var json = JsonSerializer.Serialize(CurrentLayout, options);
+            File.WriteAllText(filePath, json);
+            Utilities.Logger.Log($"Layout exported to: {filePath}");
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError($"Failed to export layout to '{filePath}'.", ex);
+            throw; // Re-throw to let UI handle the error message if needed
+        }
+    }
+
+    public void ImportLayout(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                Utilities.Logger.Log($"Backup file not found: {filePath}");
+                return;
+            }
+
+            var json = File.ReadAllText(filePath);
+            CurrentLayout = JsonSerializer.Deserialize<LayoutData>(json) ?? new LayoutData();
+            Utilities.Logger.Log($"Layout imported from: {filePath}");
+
+            // Persist immediately as the current layout
+            SaveLayout();
+        }
+        catch (Exception ex)
+        {
+            Utilities.Logger.LogError($"Failed to import layout from '{filePath}'.", ex);
+            throw;
+        }
+    }
+
+    #endregion
+
+    #endregion
 }

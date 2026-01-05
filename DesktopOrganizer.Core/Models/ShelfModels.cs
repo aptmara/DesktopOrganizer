@@ -17,7 +17,11 @@ public enum ShelfType
     /// <summary>一定時間後に自動削除される一時保管棚</summary>
     Temp,
     /// <summary>テキストメモを保持するクイックメモ棚</summary>
-    Memo
+    Memo,
+    /// <summary>時計ウィジェット</summary>
+    Clock,
+    /// <summary>アナログ時計ウィジェット</summary>
+    AnalogClock
 }
 
 public enum ShelfItemType
@@ -26,7 +30,8 @@ public enum ShelfItemType
     Executable,
     Folder,
     Url,
-    File
+    File,
+    Memo
 }
 
 public class ShelfItem
@@ -73,6 +78,9 @@ public class Shelf
     // Phase 3: Theming
     public string ThemeColor { get; set; } = "#CC1E1E24";
 
+    // Phase 2: Smart Rules
+    public string? FilterPattern { get; set; } // e.g. "*.jpg;*.png"
+
     public string TargetMonitorDeviceId { get; set; } = string.Empty;
 
     public int ZIndex { get; set; } = 0;
@@ -86,7 +94,29 @@ public class Shelf
     // Phase 4: Ghost Mode
     public bool IsGhostModeEnabled { get; set; } = false;
 
+    // Per-Shelf Feature Toggles
+    public bool IsSearchEnabled { get; set; } = false;
+
+    // Display Mode
+    public ShelfDisplayMode DisplayMode { get; set; } = ShelfDisplayMode.Grid;
+
+    // Appearance
+    public double IconSize { get; set; } = 48.0;
+
     public List<ShelfItem> Items { get; set; } = new();
+}
+
+/// <summary>
+/// シェルの表示モード
+/// </summary>
+public enum ShelfDisplayMode
+{
+    /// <summary>アイコングリッド表示</summary>
+    Grid,
+    /// <summary>リスト（詳細）表示</summary>
+    List,
+    /// <summary>コンパクト（小アイコン）表示</summary>
+    Compact
 }
 
 public enum ShelfSortOption
@@ -100,4 +130,14 @@ public enum ShelfSortOption
 public class LayoutData
 {
     public List<Shelf> Shelves { get; set; } = new();
+
+    /// <summary>
+    /// 保存されたテーマ設定（Dark/Light）
+    /// </summary>
+    public string Theme { get; set; } = "Dark";
+
+    /// <summary>
+    /// カスタムパレットの色設定 (WinForms Color Dialog CustomColors format)
+    /// </summary>
+    public int[] CustomColors { get; set; } = new int[0];
 }

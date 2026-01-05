@@ -7,7 +7,8 @@
         mc:Ignorable="d"
         Title="OverlayWindow" Height="450" Width="800"
         WindowStyle="None" AllowsTransparency="True" Background="#01FFFFFF"
-        ShowInTaskbar="False" ResizeMode="NoResize">
+        ShowInTaskbar="False" ResizeMode="NoResize"
+        Icon="/Assets/icon.png">
     <Grid Background="Transparent" MouseLeftButtonDown="Grid_MouseLeftButtonDown">
         <Grid.Resources>
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
@@ -21,6 +22,9 @@
                     <MenuItem Header="🕒 最近使ったファイル" Click="MenuItem_NewShelf_Click" Tag="Recents"/>
                     <MenuItem Header="⏳ 一時保管シェル (24h)" Click="MenuItem_NewShelf_Click" Tag="Temp"/>
                     <MenuItem Header="📝 クイックメモ" Click="MenuItem_NewShelf_Click" Tag="Memo"/>
+                    <Separator/>
+                    <MenuItem Header="🕐 時計ウィジェット (デジタル)" Click="MenuItem_NewShelf_Click" Tag="Clock"/>
+                    <MenuItem Header="🕐 時計ウィジェット (アナログ)" Click="MenuItem_NewShelf_Click" Tag="AnalogClock"/>
                 </MenuItem>
                 <Separator/>
                 <MenuItem Header="編集モード切替" Click="MenuItem_ToggleEditMode_Click"/>

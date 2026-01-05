@@ -43,4 +43,34 @@ public interface ILayoutManager
     /// シェルフの位置を更新し、正規化座標を計算する
     /// </summary>
     void UpdateShelfPosition(Shelf shelf, NativeMethods.RECT currentRect, MonitorItem monitor);
+
+    /// <summary>
+    /// 保存されているプロファイル名のリストを取得
+    /// </summary>
+    List<string> GetProfileNames();
+
+    /// <summary>
+    /// 現在のレイアウトを名前付きプロファイルとして保存
+    /// </summary>
+    void SaveProfileAs(string name);
+
+    /// <summary>
+    /// 指定されたプロファイルを読み込む
+    /// </summary>
+    void LoadProfile(string name);
+
+    /// <summary>
+    /// 指定されたプロファイルを削除
+    /// </summary>
+    void DeleteProfile(string name);
+
+    /// <summary>
+    /// 現在のレイアウトを指定されたパスにエクスポート
+    /// </summary>
+    void ExportLayout(string filePath);
+
+    /// <summary>
+    /// 指定されたパスからレイアウトをインポート
+    /// </summary>
+    void ImportLayout(string filePath);
 }

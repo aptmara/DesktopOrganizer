@@ -1,17 +1,19 @@
 ﻿using System.Windows;
 using DesktopOrganizer.Core.Services;
-using System.Diagnostics;
+using DesktopOrganizer.UI.Infrastructure;
+using DesktopOrganizer.UI.Services;
 
 namespace DesktopOrganizer.UI;
 
 public partial class App : System.Windows.Application
 {
-    private MonitorService _monitorService = new();
-    private LayoutManager _layoutManager = new();
+    private IMonitorService _monitorService = null!;
+    private ILayoutManager _layoutManager = null!;
+    private ShelfViewModelFactory _vmFactory = null!;
     private List<OverlayWindow> _windows = new();
 
-    private Services.InputService _inputService = new();
-    private Services.TaskTrayIcon _taskTrayIcon = new();
+    private Services.InputService _inputService = null!;
+    private Services.TaskTrayIcon _taskTrayIcon = null!;
     private bool _isEditMode = false;
 
     private Mutex? _mutex;
@@ -32,6 +34,9 @@ public partial class App : System.Windows.Application
         DesktopOrganizer.Core.Utilities.Logger.Initialize(); // Overwrite log on startup
         DesktopOrganizer.Core.Utilities.Logger.Log("Application Started.");
 
+        // Initialize Service Container
+        ServiceContainer.Initialize();
+
         // 1. Unhandled Exception Handling
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>
         {
@@ -42,17 +47,29 @@ public partial class App : System.Windows.Application
             DesktopOrganizer.Core.Utilities.Logger.LogError("Unhandled Dispatcher Exception", args.Exception);
         };
 
-        // 2. Initialize Services
-        _inputService = new DesktopOrganizer.UI.Services.InputService();
+        // Apply Initial Theme
+        Services.ThemeManager.ApplyTheme(Services.AppTheme.Dark);
+
+        // 2. Initialize Services via DI
+        _inputService = ServiceContainer.GetService<Services.InputService>();
         // Hotkey registration is done in UpdateMonitors (requires Window Handle)
 
-        _monitorService = new DesktopOrganizer.Core.Services.MonitorService();
-        _layoutManager = new DesktopOrganizer.Core.Services.LayoutManager();
+        _monitorService = ServiceContainer.GetService<IMonitorService>();
+        _layoutManager = ServiceContainer.GetService<ILayoutManager>();
+        _vmFactory = ServiceContainer.GetService<ShelfViewModelFactory>();
 
-        _taskTrayIcon = new DesktopOrganizer.UI.Services.TaskTrayIcon();
+        // Load saved theme
+        _layoutManager.LoadLayout();
+        var savedTheme = _layoutManager.CurrentLayout.Theme == "Light" ? Services.AppTheme.Light : Services.AppTheme.Dark;
+        Services.ThemeManager.ApplyTheme(savedTheme);
+
+        _taskTrayIcon = ServiceContainer.GetService<Services.TaskTrayIcon>();
         _taskTrayIcon.ToggleEditModeRequested += (s, args) => ToggleEditMode();
         _taskTrayIcon.CreateShelfRequested += OnCreateShelfRequested;
         _taskTrayIcon.CreateTypedShelfRequested += OnCreateTypedShelfRequested;
+        _taskTrayIcon.LoadProfileRequested += OnLoadProfileRequested;
+        _taskTrayIcon.ToggleThemeRequested += OnToggleThemeRequested;
+        _taskTrayIcon.ReloadLayoutRequested += (s, args) => UpdateMonitors();
         _taskTrayIcon.ExitRequested += (s, args) => Shutdown();
         _taskTrayIcon.Initialize();
 
@@ -120,7 +137,16 @@ public partial class App : System.Windows.Application
 
         if (_windows.Count > 0)
         {
-            _inputService.Register(_windows[0]);
+            var firstWindow = _windows[0];
+            // ウィンドウのハンドルが準備できてから Register する
+            if (firstWindow.IsLoaded)
+            {
+                _inputService.Register(firstWindow);
+            }
+            else
+            {
+                firstWindow.Loaded += (s, e) => _inputService.Register(firstWindow);
+            }
             // Re-bind event to avoid duplication if called multiple times? 
             // Logic in InputService handles Handle property change if register called again.
             // But event subscription in App.xaml.cs:
@@ -155,15 +181,7 @@ public partial class App : System.Windows.Application
 
             if (bestMonitor.DeviceName == monitor.DeviceName)
             {
-                var physRect = _layoutManager.CalculatePhysicalRect(shelfModel, monitor);
-
-                var shelfVm = new ViewModels.ShelfViewModel(shelfModel, _layoutManager.SaveLayout)
-                {
-                    Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
-                    Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
-                    Width = physRect.Width / monitor.DpiScaleX,
-                    Height = physRect.Height / monitor.DpiScaleY
-                };
+                var shelfVm = _vmFactory.Create(shelfModel, monitor, _layoutManager.SaveLayout);
 
                 // Use centralized handler
                 shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, shelfModel, monitor, l, t, w, h);
@@ -175,15 +193,7 @@ public partial class App : System.Windows.Application
                     _layoutManager.SaveLayout();
                 };
 
-                shelfVm.RenameRequested += (s, args) =>
-                {
-                    var dialog = new Controls.RenameDialog(shelfVm.Title);
-                    if (dialog.ShowDialog() == true)
-                    {
-                        shelfVm.Title = dialog.ResultName;
-                        _layoutManager.SaveLayout();
-                    }
-                };
+
 
                 vm.AddShelf(shelfVm);
             }
@@ -208,7 +218,7 @@ public partial class App : System.Windows.Application
     }
 
     private void HandleShelfMoved(
-        ViewModels.ShelfViewModel shelfVm,
+        ViewModels.ShelfViewModelBase shelfVm,
         Core.Models.Shelf shelfModel,
         Core.Models.MonitorItem currentMonitor,
         double left, double top, double width, double height)
@@ -254,15 +264,8 @@ public partial class App : System.Windows.Application
             var targetWindow = _windows.FirstOrDefault(w => w.Title == $"Overlay - {targetMonitor.DeviceName}");
             if (targetWindow?.DataContext is ViewModels.OverlayViewModel targetVm)
             {
-                // Create new VM for the new context (or re-use if we refactor, but new is safer for binding context)
-                var physRect = _layoutManager.CalculatePhysicalRect(shelfModel, targetMonitor);
-                var newShelfVm = new ViewModels.ShelfViewModel(shelfModel, _layoutManager.SaveLayout)
-                {
-                    Left = (physRect.Left - targetMonitor.Bounds.Left) / targetMonitor.DpiScaleX,
-                    Top = (physRect.Top - targetMonitor.Bounds.Top) / targetMonitor.DpiScaleY,
-                    Width = physRect.Width / targetMonitor.DpiScaleX,
-                    Height = physRect.Height / targetMonitor.DpiScaleY
-                };
+                // Create new VM for the new context
+                var newShelfVm = _vmFactory.Create(shelfModel, targetMonitor, _layoutManager.SaveLayout);
 
                 // Re-bind events
                 newShelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(newShelfVm, shelfModel, targetMonitor, l, t, w, h);
@@ -272,15 +275,7 @@ public partial class App : System.Windows.Application
                     _layoutManager.CurrentLayout.Shelves.Remove(shelfModel);
                     _layoutManager.SaveLayout();
                 };
-                newShelfVm.RenameRequested += (s, args) =>
-                {
-                    var dialog = new Controls.RenameDialog(newShelfVm.Title);
-                    if (dialog.ShowDialog() == true)
-                    {
-                        newShelfVm.Title = dialog.ResultName;
-                        _layoutManager.SaveLayout();
-                    }
-                };
+
 
                 targetVm.AddShelf(newShelfVm);
 
@@ -306,6 +301,7 @@ public partial class App : System.Windows.Application
         _layoutManager.SaveLayout();
     }
 
+
     private void ToggleEditMode()
     {
         _isEditMode = !_isEditMode;
@@ -318,6 +314,21 @@ public partial class App : System.Windows.Application
                 vm.IsEditMode = _isEditMode;
             }
         }
+    }
+
+    private void OnLoadProfileRequested(object? sender, string profileName)
+    {
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Loading profile: {profileName}");
+        _layoutManager.LoadProfile(profileName);
+        UpdateMonitors(); // Refresh all overlays with new layout
+    }
+
+    private void OnToggleThemeRequested(object? sender, EventArgs e)
+    {
+        Services.ThemeManager.ToggleTheme();
+        _layoutManager.CurrentLayout.Theme = Services.ThemeManager.CurrentTheme.ToString();
+        _layoutManager.SaveLayout();
+        DesktopOrganizer.Core.Utilities.Logger.Log($"Theme toggled to: {Services.ThemeManager.CurrentTheme}");
     }
 
     /// <summary>
@@ -378,15 +389,7 @@ public partial class App : System.Windows.Application
         // LayoutManagerに追加
         _layoutManager.CurrentLayout.Shelves.Add(newShelf);
 
-        var physRect = _layoutManager.CalculatePhysicalRect(newShelf, monitor);
-
-        var shelfVm = new ViewModels.ShelfViewModel(newShelf, _layoutManager.SaveLayout)
-        {
-            Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
-            Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
-            Width = physRect.Width / monitor.DpiScaleX,
-            Height = physRect.Height / monitor.DpiScaleY
-        };
+        var shelfVm = _vmFactory.Create(newShelf, monitor, _layoutManager.SaveLayout);
 
         shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, newShelf, monitor, l, t, w, h);
 
@@ -397,15 +400,7 @@ public partial class App : System.Windows.Application
             _layoutManager.SaveLayout();
         };
 
-        shelfVm.RenameRequested += (s, args) =>
-        {
-            var dialog = new Controls.RenameDialog(shelfVm.Title);
-            if (dialog.ShowDialog() == true)
-            {
-                shelfVm.Title = dialog.ResultName;
-                _layoutManager.SaveLayout();
-            }
-        };
+
 
         vm.AddShelf(shelfVm);
         _layoutManager.SaveLayout();
@@ -466,6 +461,8 @@ public partial class App : System.Windows.Application
             Core.Models.ShelfType.Recents => "最近使ったファイル",
             Core.Models.ShelfType.Temp => "一時保管 (24h)",
             Core.Models.ShelfType.Memo => "クイックメモ",
+            Core.Models.ShelfType.Clock => "時計",
+            Core.Models.ShelfType.AnalogClock => "アナログ時計",
             _ => "New Shelf"
         };
 
@@ -476,6 +473,8 @@ public partial class App : System.Windows.Application
             Core.Models.ShelfType.Recents => "#CC004466", // ダークブルー
             Core.Models.ShelfType.Temp => "#CC664400", // オレンジ
             Core.Models.ShelfType.Memo => "#CC446600", // オリーブ
+            Core.Models.ShelfType.Clock => "#CC2A2A30", // ダークグレー
+            Core.Models.ShelfType.AnalogClock => "#CC2A2A30", // ダークグレー
             _ => "#CC1E1E24"
         };
 
@@ -514,15 +513,7 @@ public partial class App : System.Windows.Application
 
         _layoutManager.CurrentLayout.Shelves.Add(newShelf);
 
-        var physRect = _layoutManager.CalculatePhysicalRect(newShelf, monitor);
-
-        var shelfVm = new ViewModels.ShelfViewModel(newShelf, _layoutManager.SaveLayout)
-        {
-            Left = (physRect.Left - monitor.Bounds.Left) / monitor.DpiScaleX,
-            Top = (physRect.Top - monitor.Bounds.Top) / monitor.DpiScaleY,
-            Width = physRect.Width / monitor.DpiScaleX,
-            Height = physRect.Height / monitor.DpiScaleY
-        };
+        var shelfVm = _vmFactory.Create(newShelf, monitor, _layoutManager.SaveLayout);
 
         shelfVm.ShelfMoved += (l, t, w, h) => HandleShelfMoved(shelfVm, newShelf, monitor, l, t, w, h);
 

@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:local="clr-namespace:DesktopOrganizer.UI.Controls"
              xmlns:behaviors="clr-namespace:DesktopOrganizer.UI.Behaviors"
+             xmlns:infra="clr-namespace:DesktopOrganizer.UI.Infrastructure"
              xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:system="clr-namespace:System;assembly=mscorlib"
@@ -23,8 +24,7 @@
                                 CornerRadius="6" Padding="4" BorderThickness="1" BorderBrush="Transparent"
                                 AllowDrop="True"
                                 PreviewMouseLeftButtonDown="ListBoxItem_PreviewMouseLeftButtonDown"
-                                PreviewMouseMove="ListBoxItem_PreviewMouseMove"
-                                Drop="ListBoxItem_Drop">
+                                PreviewMouseMove="ListBoxItem_PreviewMouseMove">
                             <ContentPresenter />
                             <Border.InputBindings>
                                 <MouseBinding MouseAction="LeftDoubleClick" Command="{x:Static local:ShelfControl.OpenItemCommand}" CommandParameter="{Binding}" />
@@ -40,8 +40,8 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverOverlayBrush}"/>
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverOverlayBrush}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
                                 <Setter Property="Panel.ZIndex" Value="1"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -76,9 +76,91 @@
 
         <local:BooleanToOpacityConverter x:Key="BooleanToOpacityConverter"/>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <local:NullToCollapsedConverter x:Key="NullToCollapsedConverter"/>
+
+        <!-- File Item Template (Standard) -->
+        <DataTemplate x:Key="FileItemTemplate">
+            <StackPanel Width="{Binding DataContext.ItemWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+                        Height="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+                        Margin="4">
+                <Grid Width="{Binding DataContext.IconSize, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+                      Height="{Binding DataContext.IconSize, RelativeSource={RelativeSource AncestorType=UserControl}}" 
+                      Margin="0,4,0,4">
+                    <Image Source="{Binding Icon}" HorizontalAlignment="Center" VerticalAlignment="Center" 
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                </Grid>
+                <Grid>
+                    <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextSecondaryBrush}" 
+                               FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="14">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="11" TextAlignment="Center" TextWrapping="Wrap">
+                        <i:Interaction.Behaviors>
+                            <behaviors:InlineRenameBehavior OnCompleteCommand="{Binding EndRenameCommand}"/>
+                        </i:Interaction.Behaviors>
+                         <TextBox.Style>
+                            <Style TargetType="TextBox">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- Memo Item Template (Sticky Note) -->
+        <DataTemplate x:Key="MemoItemTemplate">
+            <Border Width="140" Height="100" Margin="4" CornerRadius="2" Padding="8"
+                    Background="#FFF9F5D7" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="4" ShadowDepth="2" Opacity="0.1"/>
+                </Border.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Header / Title -->
+                    <Grid Grid.Row="0" Margin="0,0,0,4">
+                         <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="#FF504945" 
+                                   TextTrimming="CharacterEllipsis" FontSize="11"
+                                   Visibility="{Binding IsRenaming, Converter={StaticResource BooleanToVisibilityConverter}, ConverterParameter=Inverse}"/>
+                         <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
+                                  FontWeight="Bold" FontSize="11" Background="Transparent" 
+                                  Visibility="{Binding IsRenaming, Converter={StaticResource BooleanToVisibilityConverter}}"> <!-- 需要調整 -->
+                         </TextBox>
+                    </Grid>
+
+                    <!-- Content (Direct Edit) -->
+                    <TextBox Grid.Row="1" Text="{Binding MemoContent, UpdateSourceTrigger=PropertyChanged}"
+                             Background="Transparent" BorderThickness="0"
+                             TextWrapping="Wrap" AcceptsReturn="True"
+                             FontSize="11" Foreground="#FF3C3836"
+                             VerticalScrollBarVisibility="Auto"
+                             Padding="0"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
     </UserControl.Resources>
     
-    <Border x:Name="RootBorder" CornerRadius="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Background="{Binding BackgroundBrush}">
+    <Border x:Name="RootBorder" CornerRadius="8" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{Binding BackgroundBrush}">
         <Border.Style>
             <Style TargetType="Border">
                 <Setter Property="Opacity" Value="1.0"/>
@@ -133,6 +215,13 @@
                     <MenuItem Header="パープル" Tag="#CC440088" Click="MenuItem_Color_Click"/>
                     <Separator/>
                     <MenuItem Header="カスタム..." Click="MenuItem_CustomColor_Click"/>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="アイコンサイズ">
+                    <MenuItem Header="小 (32px)" Tag="32" Click="MenuItem_IconSize_Click"/>
+                    <MenuItem Header="中 (48px)" Tag="48" Click="MenuItem_IconSize_Click"/>
+                    <MenuItem Header="大 (64px)" Tag="64" Click="MenuItem_IconSize_Click"/>
+                    <MenuItem Header="特大 (96px)" Tag="96" Click="MenuItem_IconSize_Click"/>
                 </MenuItem>
                 <Separator/>
                 <MenuItem Header="フォルダをリンク (スマートシェルフ)..." Click="MenuItem_SmartShelf_Click"/>
@@ -203,6 +292,13 @@
                                     <MenuItem Header="パープル" Tag="#CC440088" Click="MenuItem_Color_Click"/>
                                 </MenuItem>
                                 <Separator/>
+                                <MenuItem Header="アイコンサイズ">
+                                    <MenuItem Header="小 (32px)" Tag="32" Click="MenuItem_IconSize_Click"/>
+                                    <MenuItem Header="中 (48px)" Tag="48" Click="MenuItem_IconSize_Click"/>
+                                    <MenuItem Header="大 (64px)" Tag="64" Click="MenuItem_IconSize_Click"/>
+                                    <MenuItem Header="特大 (96px)" Tag="96" Click="MenuItem_IconSize_Click"/>
+                                </MenuItem>
+                                <Separator/>
                                 <MenuItem Header="フォルダをリンク (スマートシェルフ)..." Click="MenuItem_SmartShelf_Click"/>
                                 <Separator/>
                                 <MenuItem Header="グリッドにスナップ" IsCheckable="True" Click="MenuItem_SnapToGrid_Click" Loaded="MenuItem_SnapToGrid_Loaded"/>
@@ -243,11 +339,84 @@
                 </Grid>
             </Border>
             
+            <!-- Clock Widget Display (for ClockShelfViewModel) -->
+            <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10"
+                        Visibility="{Binding TimeDisplay, Converter={StaticResource NullToCollapsedConverter}, FallbackValue=Collapsed}">
+                <TextBlock Text="{Binding TimeDisplay}" FontSize="36" FontWeight="Bold" 
+                           Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding DateDisplay}" FontSize="14" 
+                           Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            </StackPanel>
+            
+            <!-- Analog Clock Widget Display (for AnalogClockShelfViewModel) -->
+            <Viewbox Grid.Row="1" Stretch="Uniform" Margin="15"
+                     Visibility="{Binding IsAnalogClock, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                <Canvas Width="200" Height="200">
+                    <!-- Clock Face -->
+                    <Ellipse Width="200" Height="200" 
+                             Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="3"
+                             Fill="#22FFFFFF"/>
+                    
+                    <!-- Hour Markers -->
+                    <Ellipse Canvas.Left="95" Canvas.Top="8" Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}"/>
+                    <Ellipse Canvas.Left="142" Canvas.Top="21" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="172" Canvas.Top="50" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="184" Canvas.Top="95" Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}"/>
+                    <Ellipse Canvas.Left="172" Canvas.Top="142" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="142" Canvas.Top="172" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="95" Canvas.Top="184" Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}"/>
+                    <Ellipse Canvas.Left="50" Canvas.Top="172" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="21" Canvas.Top="142" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="8" Canvas.Top="95" Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}"/>
+                    <Ellipse Canvas.Left="21" Canvas.Top="50" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    <Ellipse Canvas.Left="50" Canvas.Top="21" Width="8" Height="8" Fill="{DynamicResource TextSecondaryBrush}"/>
+                    
+                    <!-- Hour Hand -->
+                    <Line Canvas.Left="100" Canvas.Top="100" X1="0" Y1="0" X2="0" Y2="-50" 
+                          Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="5" StrokeEndLineCap="Round">
+                        <Line.RenderTransform>
+                            <RotateTransform Angle="{Binding HourAngle}" CenterX="0" CenterY="0"/>
+                        </Line.RenderTransform>
+                    </Line>
+                    
+                    <!-- Minute Hand -->
+                    <Line Canvas.Left="100" Canvas.Top="100" X1="0" Y1="0" X2="0" Y2="-70" 
+                          Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="3" StrokeEndLineCap="Round">
+                        <Line.RenderTransform>
+                            <RotateTransform Angle="{Binding MinuteAngle}" CenterX="0" CenterY="0"/>
+                        </Line.RenderTransform>
+                    </Line>
+                    
+                    <!-- Second Hand -->
+                    <Line Canvas.Left="100" Canvas.Top="100" X1="0" Y1="0" X2="0" Y2="-78" 
+                          Stroke="#FF6464" StrokeThickness="1.5" StrokeEndLineCap="Round">
+                        <Line.RenderTransform>
+                            <RotateTransform Angle="{Binding SecondAngle}" CenterX="0" CenterY="0"/>
+                        </Line.RenderTransform>
+                    </Line>
+                    
+                    <!-- Center Dot -->
+                    <Ellipse Canvas.Left="92" Canvas.Top="92" Width="16" Height="16" Fill="{DynamicResource TextPrimaryBrush}"/>
+                </Canvas>
+            </Viewbox>
+            
+            <!-- Memo Shelf Add Button -->
+            <Button Grid.Row="1" Content="+ 新しいメモを追加" 
+                    HorizontalAlignment="Stretch" Margin="10,5"
+                    Click="AddMemo_Click"
+                    Visibility="{Binding IsMemoShelf, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
+                    Style="{DynamicResource ModernButtonStyle}"/>
+            
             <!-- Items Area (Collapsible) -->
             <ListBox x:Name="ItemsListBox" Grid.Row="1" ItemsSource="{Binding Items}" 
                      Background="Transparent" BorderThickness="0"
-                     ScrollViewer.CanContentScroll="True"
+                     ScrollViewer.CanContentScroll="False"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.Resources>
+                    <infra:ShelfItemTemplateSelector x:Key="ShelfItemTemplateSelector"
+                                                     FileItemTemplate="{StaticResource FileItemTemplate}"
+                                                     MemoItemTemplate="{StaticResource MemoItemTemplate}"/>
+                </ListBox.Resources>
                 <ListBox.Style>
                     <Style TargetType="ListBox">
                         <Setter Property="Visibility" Value="Visible"/>
@@ -260,53 +429,13 @@
                 </ListBox.Style>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <local:VirtualizingWrapPanel />
+                        <local:VirtualizingWrapPanel ItemWidth="{Binding DataContext.ItemWidth, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                     ItemHeight="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=ListBox}}"/>
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Width="70" Height="86" Margin="4">
-                            <Grid Width="48" Height="48" Margin="0,4,0,4">
-                                <Image Source="{Binding Icon}" HorizontalAlignment="Center" VerticalAlignment="Center" 
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                            </Grid>
-                            <Grid>
-                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextSecondaryBrush}" 
-                                           FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" MaxHeight="30" LineHeight="14">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                                <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
-                                         FontSize="11" TextAlignment="Center" TextWrapping="Wrap">
-                                    <i:Interaction.Behaviors>
-                                        <behaviors:InlineRenameBehavior OnCompleteCommand="{Binding EndRenameCommand}"/>
-                                    </i:Interaction.Behaviors>
-                                     <TextBox.Style>
-                                        <Style TargetType="TextBox">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBox.Style>
-                                </TextBox>
-                            </Grid>
-
-
-                        </StackPanel>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
+                <ListBox.ItemTemplateSelector>
+                    <StaticResource ResourceKey="ShelfItemTemplateSelector"/>
+                </ListBox.ItemTemplateSelector>
             </ListBox>
 
             <!-- Edit Chrome (Visible only in EditMode) -->
@@ -314,6 +443,7 @@
             <Thumb Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                    Cursor="SizeNWSE" Width="20" Height="20"
                    DragDelta="ResizeHandle_DragDelta"
+                   DragCompleted="ResizeHandle_DragCompleted"
                    Visibility="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=DataContext.IsEditMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <Thumb.Template>
                     <ControlTemplate>

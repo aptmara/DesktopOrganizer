@@ -4,7 +4,7 @@ namespace DesktopOrganizer.UI.ViewModels;
 
 public class OverlayViewModel : ViewModelBase
 {
-    public ObservableCollection<ShelfViewModel> Shelves { get; } = new();
+    public ObservableCollection<ShelfViewModelBase> Shelves { get; } = new();
 
     private bool _isEditMode;
     public bool IsEditMode
@@ -20,7 +20,7 @@ public class OverlayViewModel : ViewModelBase
         }
     }
 
-    public void AddShelf(ShelfViewModel shelf)
+    public void AddShelf(ShelfViewModelBase shelf)
     {
         Shelves.Add(shelf);
     }
@@ -51,7 +51,7 @@ public class OverlayViewModel : ViewModelBase
         ResetAllRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    public void BringToFront(ShelfViewModel shelf)
+    public void BringToFront(ShelfViewModelBase shelf)
     {
         if (Shelves.Count == 0) return;
         var maxZ = Shelves.Max(s => s.ZIndex);

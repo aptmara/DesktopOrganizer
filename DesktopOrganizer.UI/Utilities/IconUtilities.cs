@@ -12,14 +12,30 @@ namespace DesktopOrganizer.UI.Utilities;
 
 public static class IconUtilities
 {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
+
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool DeleteObject(IntPtr hObject);
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr ExtractIcon(IntPtr hInst, string lpszExeFileName, int nIconIndex);
-
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr hIcon);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SHFILEINFO
+    {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    }
+
+    private const uint SHGFI_ICON = 0x100;
+    private const uint SHGFI_LARGEICON = 0x0; // 32x32
+    private const uint SHGFI_USEFILEATTRIBUTES = 0x10;
 
     /// <summary>
     /// LRU Cache Implementation - O(1) operations
@@ -34,6 +50,30 @@ public static class IconUtilities
     // Throttling: Max 4 concurrent icon extractions to prevent thread pool starvation
     private static readonly SemaphoreSlim _semaphore = new(4);
 
+    private static string? _iconCacheDir;
+    private static string IconCacheDir
+    {
+        get
+        {
+            if (_iconCacheDir == null)
+            {
+                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                _iconCacheDir = Path.Combine(appData, "DesktopOrganizer", "Icons");
+                Directory.CreateDirectory(_iconCacheDir);
+            }
+            return _iconCacheDir;
+        }
+    }
+
+    private static string GetCachedIconPath(string targetPath)
+    {
+        using var md5 = System.Security.Cryptography.MD5.Create();
+        var inputBytes = System.Text.Encoding.UTF8.GetBytes(targetPath.ToLowerInvariant());
+        var hashBytes = md5.ComputeHash(inputBytes);
+        var hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+        return Path.Combine(IconCacheDir, $"{hashString}.png");
+    }
+
     /// <summary>
     /// Asynchronously gets an icon from a path with caching and throttling.
     /// </summary>
@@ -41,12 +81,11 @@ public static class IconUtilities
     {
         if (string.IsNullOrEmpty(path)) return null;
 
-        // 1. Fast Cache Check (Sync) - O(1)
+        // 1. Memory Cache Check (Fastest) - O(1)
         lock (_lock)
         {
             if (_cache.TryGetValue(path, out var cached))
             {
-                // Move to MRU - O(1) via direct node reference
                 _lruList.Remove(cached.Node);
                 var newNode = _lruList.AddFirst(path);
                 _cache[path] = (cached.Image, newNode);
@@ -55,17 +94,15 @@ public static class IconUtilities
         }
 
         // 2. Throttling
-        // Wait for a slot, respecting cancellation
         await _semaphore.WaitAsync(token).ConfigureAwait(false);
 
         try
         {
-            // 3. Double-check cache after acquiring semaphore (race condition prevention)
+            // 3. Double-check memory cache
             lock (_lock)
             {
                 if (_cache.TryGetValue(path, out var cached))
                 {
-                    // Move to MRU - O(1)
                     _lruList.Remove(cached.Node);
                     var newNode = _lruList.AddFirst(path);
                     _cache[path] = (cached.Image, newNode);
@@ -73,15 +110,47 @@ public static class IconUtilities
                 }
             }
 
-            // 4. Heavy Extraction (on thread pool implicit via Task.Run if needed, but we are already async)
-            // Since ExtractAssociatedIcon is blocking and could take time, wrap in Task.Run if not already on a background thread.
-            // But usually this method is called from Task.Run. Let's assume called from ThreadPool.
-            // To be safe and non-blocking for the caller, we wrap the IO work.
-
             return await Task.Run(() =>
             {
                 if (token.IsCancellationRequested) return null;
-                return ExtractAndCache(path);
+
+                // 4. Disk Cache Check
+                var cachePath = GetCachedIconPath(path);
+                if (File.Exists(cachePath))
+                {
+                    try
+                    {
+                        // Load from disk
+                        var diskImage = LoadImageFromDisk(cachePath);
+                        if (diskImage != null)
+                        {
+                            AddToCache(path, diskImage);
+                            return diskImage;
+                        }
+                    }
+                    catch
+                    {
+                        // Corruption or read error, ignore and re-extract
+                    }
+                }
+
+                // 5. Extraction
+                var image = ExtractAndCache(path);
+
+                // 6. Save to Disk Cache
+                if (image != null)
+                {
+                    try
+                    {
+                        SaveImageToDisk(image, cachePath);
+                    }
+                    catch
+                    {
+                        // Disk write failed, but we have the image in memory so it's fine for this session
+                    }
+                }
+
+                return image;
             }, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -99,23 +168,58 @@ public static class IconUtilities
         }
     }
 
-    // Synchronous fallback (deprecated but kept for compatibility if needed, though we should migrate)
+    private static BitmapImage? LoadImageFromDisk(string path)
+    {
+        try
+        {
+            var bitmap = new BitmapImage();
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+            }
+            bitmap.Freeze();
+            return bitmap;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void SaveImageToDisk(ImageSource image, string path)
+    {
+        if (image is BitmapSource bitmapSource)
+        {
+            using var fileStream = new FileStream(path, FileMode.Create);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmapSource));
+            encoder.Save(fileStream);
+        }
+    }
+
+    // Synchronous fallback (deprecated)
     public static ImageSource? GetIconFromPath(string path)
     {
-        // Sync version just calls async loop... bad practice but quick fix for now?
-        // No, let's keep the logic simple. If sync is called, we bypass semaphore or block?
-        // Let's reimplement sync to use cache but skip semaphore for backward compact OR just block.
-        // Better to discourage sync use.
-
-        // For now, simple implementation without throttling for legacy sync calls (risk of blockage)
-        // But we added LRU at least.
         lock (_lock)
         {
             if (_cache.TryGetValue(path, out var cached)) return cached.Image;
         }
 
-        var img = ExtractAndCache(path);
-        return img;
+        var cachePath = GetCachedIconPath(path);
+        if (File.Exists(cachePath))
+        {
+            var diskImage = LoadImageFromDisk(cachePath);
+            if (diskImage != null)
+            {
+                AddToCache(path, diskImage);
+                return diskImage;
+            }
+        }
+
+        return ExtractAndCache(path);
     }
 
     private static ImageSource? ExtractAndCache(string path)
@@ -132,13 +236,25 @@ public static class IconUtilities
                 image = GetIconFromUrlFile(path);
             }
 
+            // Url file handling might adhere to SHGetFileInfo anyway, but keeping specific logic if preferred.
+            // If Url logic returned null, or it wasn't a Url file, try SHGetFileInfo.
             if (image == null)
             {
-                using var icon = Icon.ExtractAssociatedIcon(path);
-                if (icon != null)
+                image = GetShellIcon(path);
+            }
+
+            // Fallback (though SHGetFileInfo handles almost everything)
+            if (image == null)
+            {
+                try
                 {
-                    image = ToImageSource(icon);
+                    using var icon = Icon.ExtractAssociatedIcon(path);
+                    if (icon != null)
+                    {
+                        image = ToImageSource(icon);
+                    }
                 }
+                catch { }
             }
 
             if (image != null)
@@ -155,18 +271,42 @@ public static class IconUtilities
         }
     }
 
+    private static ImageSource? GetShellIcon(string path)
+    {
+        try
+        {
+            SHFILEINFO shinfo = new SHFILEINFO();
+            // SHGFI_ICON | SHGFI_LARGEICON
+            IntPtr hImg = SHGetFileInfo(path, 0, ref shinfo, (uint)Marshal.SizeOf(shinfo), SHGFI_ICON | SHGFI_LARGEICON);
+
+            if (shinfo.hIcon == IntPtr.Zero) return null;
+
+            try
+            {
+                using var icon = Icon.FromHandle(shinfo.hIcon);
+                return ToImageSource(icon);
+            }
+            finally
+            {
+                DestroyIcon(shinfo.hIcon);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static void AddToCache(string path, ImageSource image)
     {
         lock (_lock)
         {
             if (_cache.TryGetValue(path, out var existing))
             {
-                // Update existing - O(1)
                 _lruList.Remove(existing.Node);
             }
             else if (_cache.Count >= MaxCacheSize)
             {
-                // Evict LRU - O(1)
                 var last = _lruList.Last;
                 if (last != null)
                 {
@@ -175,7 +315,6 @@ public static class IconUtilities
                 }
             }
 
-            // Add new entry - O(1)
             var node = _lruList.AddFirst(path);
             _cache[path] = (image, node);
         }
@@ -185,6 +324,8 @@ public static class IconUtilities
     {
         try
         {
+            // Simplified: often .url files are just handled by Shell properly.
+            // But we keep reading IconFile/IconIndex for manual overriding if set.
             var lines = File.ReadAllLines(urlFilePath);
             string? iconFile = null;
             int iconIndex = 0;
@@ -204,25 +345,39 @@ public static class IconUtilities
                 }
             }
 
-            if (!string.IsNullOrEmpty(iconFile) && File.Exists(iconFile))
+            if (!string.IsNullOrEmpty(iconFile))
             {
-                if (iconFile.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                {
-                    using var icon = new Icon(iconFile);
-                    return ToImageSource(icon);
-                }
+                // Resolve environment variables if any
+                iconFile = Environment.ExpandEnvironmentVariables(iconFile);
 
-                IntPtr hIcon = ExtractIcon(IntPtr.Zero, iconFile, iconIndex);
-                if (hIcon != IntPtr.Zero && hIcon.ToInt64() > 1)
+                if (File.Exists(iconFile))
                 {
-                    try
+                    // If directly an ICO
+                    if (iconFile.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
                     {
-                        using var icon = Icon.FromHandle(hIcon);
+                        using var icon = new Icon(iconFile);
                         return ToImageSource(icon);
                     }
-                    finally
+
+                    // Extract from DLL/EXE
+                    // We can reuse SHGetFileInfo or ExtractIconEx, but since we have index, lets use ExtractIcon (the one we removed... wait, we need it if we support index)
+                    // ACTUALLY, ExtractIcon is deprecated mostly, but let's re-add it strictly for this URL case if needed.
+                    // Or efficient way: use SHGetFileInfo with PIDL? 
+                    // Let's rely on standard ExtractAssociatedIcon if simple, but that doesn't take index.
+                    // Re-adding ExtractIcon just for this helper.
+
+                    IntPtr hIcon = ExtractIcon(IntPtr.Zero, iconFile, iconIndex);
+                    if (hIcon != IntPtr.Zero && hIcon.ToInt64() > 1) // 1 means failure in some docs
                     {
-                        DestroyIcon(hIcon);
+                        try
+                        {
+                            using var icon = Icon.FromHandle(hIcon);
+                            return ToImageSource(icon);
+                        }
+                        finally
+                        {
+                            DestroyIcon(hIcon);
+                        }
                     }
                 }
             }
@@ -234,6 +389,10 @@ public static class IconUtilities
 
         return null;
     }
+
+    // Re-adding for .url support
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr ExtractIcon(IntPtr hInst, string lpszExeFileName, int nIconIndex);
 
     private static ImageSource ToImageSource(Icon icon)
     {
